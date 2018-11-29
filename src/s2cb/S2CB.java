@@ -74,7 +74,7 @@ import com.evilco.mc.nbt.tag.*;
  * supported since 1.12
  * 
  * Version 1.13a for Minecraft 1.13 - For the moment no longer supporting .schematic files, .nbt saved structure files supported.
- *  * Well, Minecraft 1.13 happened.  This changed a lot!   
+ * Well, Minecraft 1.13 happened.  This changed a lot!   
  * Since data values aren't a thing anymore (replaced with block state), .schematic files don't really make sense to support anymore.
  * So, for the moment, we are only supporting .nbt structure files.
  * I would like to support .schematic files, but I would need to find, or write, code that converts .schematic files to structure .nbt files.
@@ -87,13 +87,18 @@ import com.evilco.mc.nbt.tag.*;
  * Also banner colors were the reverse of everything else (like the color on a banner was 15 - <equivalent wool color>. (wool, glass, terracotta, etc. all used the same numbers for the same colors).
  * Now banners seem to be changed to be the same as everything else (at least the pattern colors as the base color is now in the banner name (red_wall_banner)
  * 
+ * Version 1.13c for Minecraft 1.13.(0-2) 
+ * A bunch of minor fixes.  Sugar cane fixed as well as nether portals. Added an option to include projectiles (I found a schematic using tipped arrows bouncing on slime to produce particle effects for a fountain)
+ * A bunch of fixes for NBT tags of blocks and entities, especially custom named items / mobs in the inventory of block / being worn by mobs / or passenger of another entity
+ * Fixed import of experience orbs (name changed from xp_orb). 
+ * 
  * @author Brian Risinger  aka TroZ
  *
  */
 @SuppressWarnings("serial")
 public class S2CB extends JFrame {
 	
-	private static final String programVersion = "1.13b";
+	private static final String programVersion = "1.13c";
 	private static final String minecraftVersion = "1.13";
 	
 	static final String PACK_MCMETA = "{\r\n" + 
@@ -145,6 +150,7 @@ public class S2CB extends JFrame {
 	private JCheckBox removeBarriers = new JCheckBox("Remove Barriers");
 	private JCheckBox removeEMobs = new JCheckBox("No Monsters");
 	private JCheckBox removeMobs = new JCheckBox("No Mobs");
+	private JCheckBox removeProjectiles = new JCheckBox("No Projectiles");
 	private JCheckBox ignoreWirePower = new JCheckBox("Ignore Wire Power");
 	private JCheckBox complexRails = new JCheckBox("Complex Rails");
 	private JCheckBox minimizeWater = new JCheckBox("Min Water");
@@ -1342,6 +1348,7 @@ public class S2CB extends JFrame {
 		noDangerousBlocks.setSelected(false);
 		removeMobs.setSelected(false);
 		removeEMobs.setSelected(true);
+		removeProjectiles.setSelected(true);
 		removeBarriers.setSelected(false);
 		ignoreWirePower.setSelected(true);
 		imperfectFills.setSelected(false);
@@ -1388,6 +1395,7 @@ public class S2CB extends JFrame {
 		controls.add(tempp);
 		
 		gbcc.gridx=2;
+		gbcc.anchor = GridBagConstraints.CENTER;
 		tempp = new JPanel();
 		tempp.add(new JLabel("Y:"));
 		tempp.add(offsetY);
@@ -1395,6 +1403,7 @@ public class S2CB extends JFrame {
 		controls.add(tempp);
 		
 		gbcc.gridx=3;
+		gbcc.anchor = GridBagConstraints.LINE_START;
 		tempp = new JPanel();
 		tempp.add(new JLabel("Z:"));
 		tempp.add(offsetZ);
@@ -1445,7 +1454,7 @@ public class S2CB extends JFrame {
 		cbPanel.add(noDangerousBlocks);
 		cbPanel.add(removeEMobs);
 		cbPanel.add(removeMobs);
-		cbPanel.add(ignoreWirePower);
+		cbPanel.add(removeProjectiles);
 		cbPanel.add(limitDistance);
 		cbPanel.add(serverSafe);
 		gbl.setConstraints(cbPanel, gbcl);
@@ -1453,6 +1462,7 @@ public class S2CB extends JFrame {
 		
 		gbcl.gridy = gbcc.gridy = 3;
 		cbPanel = new JPanel();
+		cbPanel.add(ignoreWirePower);
 		cbPanel.add(complexRails);
 		cbPanel.add(removeBarriers);
 		cbPanel.add(minimizeWater);
@@ -1469,6 +1479,7 @@ public class S2CB extends JFrame {
 		noDangerousBlocks.setToolTipText("<html><body>If enabled, won't place 'dangerous' blocks, such as lava, tnt and fire.</body></html>");
 		removeMobs.setToolTipText("<html><body>Whether to remove ALL mobs from the schematic.</body></html>");
 		removeEMobs.setToolTipText("<html><body>Whether to remove hostile mobs from the schematic.</body></html>");
+		removeProjectiles.setToolTipText("<html><body>Whether to remove projectiles (arrows, fireballs, etc.) from the schematic.</body></html>");
 		removeBarriers.setToolTipText("<html><body>Whether to remove barrier blocks from the schematic.<br>Useful for importing slimeblock machines that have been 'jammed'.</body></html>");
 		removeMobs.setToolTipText("<html><body>Whether More carefully place rails for complex rails system but create bigger commands (checked), or to just place rails like other blocks (smaller commands) but potentially have them not work right (unchecked).</body></html>");
 		minimizeWater.setToolTipText("<html><body>If selected, only places source blocks. Unselected, water of all levels is placed.<br>Unselect if water was shaped by placing / removing blocks after it flowed into place.</body></html>");
@@ -2731,7 +2742,7 @@ public class S2CB extends JFrame {
 					id = id.substring(10);
 				}
 				
-				if(entityProjectile.contains(id)) {
+				if(entityProjectile.contains(id) && removeProjectiles.isSelected()) {
 					continue;
 				}
 				
@@ -4996,7 +5007,7 @@ public class S2CB extends JFrame {
 		//Block block = getBlockAt(xs,ys,zs);
 
 		
-		if(block.type.isMultiblock()) {
+		if(block.type.isMultiblock() || block.type.isNoFill()) {
 			//adding doors as fills doesn't work as putting the bottom without the top being the next change seems to cause the door to 'pop off' or fail to place
 			//similar for beds and apparently tall grass
 			return null;
@@ -5924,7 +5935,8 @@ public class S2CB extends JFrame {
 		entityNameMap.put("WitherBoss","wither");
 		entityNameMap.put("WitherSkull","wither_skull");
 		entityNameMap.put("ThrownExpBottle","xp_bottle");
-		entityNameMap.put("XPOrb","xp_orb");
+		entityNameMap.put("XPOrb","experience_orb");
+		entityNameMap.put("XP_Orb","experience_orb");
 		entityNameMap.put("PigZombie","zombie_pigman");
 		entityNameMap.put("ender_crystal","end_crystal");
 		entityNameMap.put("ItemFrame","item_frame");
@@ -6471,6 +6483,7 @@ public class S2CB extends JFrame {
 		static final int ISSUE_NEEDS_SUPPORT 	= 0x00010;
 		static final int ISSUE_RAIL 			= 0x00020;
 		static final int ISSUE_PASS_TWO			= 0x00040;
+		static final int ISSUE_NO_FILL			= 0x00080;
 		static final int ISSUE_TRANSPARENT 		= 0x10000;
 		
 		static int nextID = 0;
@@ -6540,7 +6553,16 @@ public class S2CB extends JFrame {
 		
 		public void setPassTwo() {
 			//mostly (only?) used so that sugar case isn't placed before the water that allows it to survive
-			issues = issues & ISSUE_PASS_TWO;
+			issues = issues | ISSUE_PASS_TWO;
+		}
+		
+		public boolean isNoFill() {
+			return ((issues & ISSUE_NO_FILL) != 0);
+		}
+		
+		public void setNoFill() {
+			//mostly (only?) used so that sugar case isn't placed before the water that allows it to survive
+			issues = issues | ISSUE_NO_FILL;
 		}
 		
 		@Override
