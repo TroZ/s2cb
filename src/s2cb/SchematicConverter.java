@@ -1122,6 +1122,14 @@ public class SchematicConverter {
 					block.properties = "facing=" + prop;
 				}
 				break;
+			case 90:
+				block.type = S2CB.BLOCK_TYPES.get("nether_portal");
+				if( getBlockAt(x, y, z+1, blocks, w, h, l) == 90 || getBlockAt(x, y, z-1, blocks, w, h, l) == 90) {
+					block.properties = "axis=z";
+				} else {
+					block.properties = "axis=x";
+				}
+				break;
 			case 92: 
 				block.type = S2CB.BLOCK_TYPES.get("cake");
 				block.properties = "bites=" + blockdata;
@@ -1963,7 +1971,6 @@ cactus			cactus		0
 				break;
 		}
 		
-		
 		//add block entity data to the block
 		TagCompound data = getBlockEntityData( x, y, z);
 		if(data != null) {
@@ -2409,10 +2416,6 @@ cactus			cactus		0
 	}
 	
 	
-	private void fixEntities(List<TagCompound> entities) {
-		fixEntities(entities,false);
-	}
-	
 	private void fixEntities(List<TagCompound> entities,boolean mob) {
 		//fix entities - correcting id name changes, and other issues so that we can handle them in 1.13
 		
@@ -2437,7 +2440,7 @@ cactus			cactus		0
 
 	private void fixEntity(TagCompound ent,boolean mob) throws UnexpectedTagTypeException, TagNotFoundException {
 		String name = "";
-		TagString itemid;
+		TagString itemid = null;
 		if(ent.getTags().get("id") instanceof TagString) {
 			itemid = (TagString) ent.getTag("id");
 			name = itemid.getValue();
@@ -2467,8 +2470,6 @@ cactus			cactus		0
 			ent.removeTag(iid);
 			itemid = new TagString("id",name);
 			ent.setTag(itemid);
-		} else {
-			return;
 		}
 		
 		int damage = 0;
@@ -2480,12 +2481,12 @@ cactus			cactus		0
 			name = name.substring(10);
 		}
 		
-		if(S2CB.entityNameMap.keySet().contains(name)) {
+		if(S2CB.entityNameMap.keySet().contains(name) && itemid != null) {
 			name = S2CB.entityNameMap.get(name);
 			itemid.setValue(name);
 		}
 		
-		if(!mob) {
+		if(!mob && itemid != null) {
 			Item item = new Item(name,damage);
 			if(itemMapping.containsKey(item)) {
 				name = itemMapping.get(item);
@@ -2765,6 +2766,7 @@ cactus			cactus		0
 				}
 			}
 			
+			fixEntity(tag); //to handle display or custom name tags inside the tag tag
 		}
 		
 		if(ent.getTags().containsKey("CustomName")) {
@@ -2780,6 +2782,40 @@ cactus			cactus		0
 		}
 		
 		
+		if(ent.getTags().containsKey("Riding")) {
+			fixEntity(ent.getCompound("Riding"),true);
+		}
+		if(ent.getTags().containsKey("Passengers")) {
+			List<TagCompound> pass = ent.getList("Passengers", TagCompound.class);
+			for(TagCompound e:pass) {
+				fixEntity(e,true);
+			}
+		}
+		
+		if(ent.getTags().containsKey("display") && ent.getTag("display") instanceof TagCompound) {
+			TagCompound display = ent.getCompound("display");
+			if(display.getTags().containsKey("Name") && display.getTag("Name") instanceof TagString) {
+				TagString str = display.getTag("Name", TagString.class);
+				String s = str.getValue();
+				if(!s.startsWith("\"")) {
+					str.setValue("\""+s+"\"");
+				}
+			}
+			if(display.getTags().containsKey("LocName") && display.getTag("LocName") instanceof TagString) {
+				TagString str = display.getTag("LocName", TagString.class);
+				String s = str.getValue();
+				if(!s.startsWith("\"")) {
+					str.setValue("\""+s+"\"");
+				}
+			}
+			
+		}
+		
+		if(ent.getTags().containsKey("BlockEntityTag")) {
+			TagCompound bet = ent.getCompound("BlockEntityTag");
+		
+			fixEntity(bet, false);
+		}
 		
 	}
 }
