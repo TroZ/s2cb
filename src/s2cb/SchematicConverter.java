@@ -972,14 +972,14 @@ public class SchematicConverter {
 				break;
 			case 61:
 				block.type = S2CB.BLOCK_TYPES.get("furnace");
-				block.properties = "lit=false,facing=" + getBlockDirection(blockdata);
+				block.properties = "lit=false,facing=" + getBlockDirection(blockdata,false);
 				break;
 			case 62:
 				block.type = S2CB.BLOCK_TYPES.get("furnace");
-				block.properties = "lit=true,facing=" + getBlockDirection(blockdata);
+				block.properties = "lit=true,facing=" + getBlockDirection(blockdata,false);
 				break;
 			case 63:
-				block.type = S2CB.BLOCK_TYPES.get("sign");
+				block.type = S2CB.BLOCK_TYPES.get("oak_sign");
 				block.properties = "rotation=" + blockdata;
 				break;
 			case 64:
@@ -1013,7 +1013,7 @@ public class SchematicConverter {
 				block.properties = getStairProps(blockdata, x, y, z, blocks, w, h, l, bdata);
 				break;
 			case 68:
-				block.type = S2CB.BLOCK_TYPES.get("wall_sign");
+				block.type = S2CB.BLOCK_TYPES.get("oak_wall_sign");
 				block.properties = "facing=" + getBlockDirection(blockdata);
 				break;
 			case 69:
@@ -1970,6 +1970,7 @@ cactus			cactus		0
 				}
 				break;
 		}
+		
 		
 		//add block entity data to the block
 		TagCompound data = getBlockEntityData( x, y, z);

@@ -98,8 +98,8 @@ import com.evilco.mc.nbt.tag.*;
 @SuppressWarnings("serial")
 public class S2CB extends JFrame {
 	
-	private static final String programVersion = "1.13c";
-	private static final String minecraftVersion = "1.13";
+	private static final String programVersion = "1.14a";
+	private static final String minecraftVersion = "1.14.1";
 	
 	static final String PACK_MCMETA = "{\r\n" + 
 			"   \"pack\":{\r\n" + 
@@ -439,7 +439,13 @@ public class S2CB extends JFrame {
 		t = new BlockType("wheat",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("farmland",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("furnace",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);  //no more lit_furnace
-		t = new BlockType("sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		//t = new BlockType("sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("oak_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);  BLOCK_TYPES.put("sign",t); //upgrade from 1.13 to 1.14
+		t = new BlockType("birch_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("spruce_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("jungle_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("acacia_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_oak_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
 		
 		
 		t = new BlockType("oak_door",false,false,false,true,true,false,true); 	BLOCK_TYPES.put(t.name,t);
@@ -451,7 +457,13 @@ public class S2CB extends JFrame {
 		t = new BlockType("ladder",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("rail",false,false,false,false,true,true,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("cobblestone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
-		t = new BlockType("wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		//t = new BlockType("wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("oak_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);  BLOCK_TYPES.put("wall_sign",t); //upgrade from 1.13 to 1.14
+		t = new BlockType("birch_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("spruce_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("jungle_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("acacia_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_oak_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("lever",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("stone_pressure_plate",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("iron_door",false,false,false,true,false,false,true); 	BLOCK_TYPES.put(t.name,t);
@@ -927,6 +939,142 @@ public class S2CB extends JFrame {
 		t = new BlockType("conduit",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("bubble_column",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		
+		//1.14
+		t = new BlockType("fletching_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cartography_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smithing_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("composter"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("loom"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("blast_furnace"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("smoker"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("barrel"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("stonecutter",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. 
+		t = new BlockType("grindstone",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. can be placed hanging, so setting side attached so it chould be placed in pass 2 after it's support has been placed.
+		t = new BlockType("bell",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. can be placed hanging, so setting side attached so it chould be placed in pass 2 after it's support has been placed.
+		t = new BlockType("lantern",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("scaffolding",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("campfire",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("bamboo",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("bamboo_sapling",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("sweet_berry_bush",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cornflower",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("lily_of_the_valley",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("wither_rose",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("stone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_stone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_cobblestone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_cobblestone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_sandstone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_red_sandstone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_red_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_quartz_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_quartz_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("prismarine_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("dark_prismarine_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_prismarine_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("andesite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("andesite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("andesite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_andesite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_andesite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("granite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("granite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("granite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_granite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_granite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+			
+		t = new BlockType("end_stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("end_stone_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("end_stone_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("red_nether_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("red_nether_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("red_nether_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("prismarine_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("nether_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("sandstone_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("red_sandstone_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		
 		
 	}
 	
@@ -1218,8 +1366,13 @@ public class S2CB extends JFrame {
 	
 	
 	private static final String cmdStartFirst = "summon "+fallingBlock+" ~%OX% ~1 ~%OZ% {BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[%MINECARTS%]}]}]}";
+	//private static final String cmdStartFirst = "summon armor_stand ~%OX% ~3 ~%OZ% {Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[%MINECARTS%]}]}]}]}]}]}]}";
+	
+	//[{id:"armor_stand",Health:0,Passengers:
+	
 	
 	private static final String cmdStartOther = "summon "+fallingBlock+" ~%OX% ~%OY% ~%OZ% {BlockState:{Name:sand},Time:1,Passengers:[%MINECARTS%]}";
+	//private static final String cmdStartOther = "summon armor_stand ~%OX% ~%OY% ~%OZ% {Health:0,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:armor_stand,Health:0,Passengers:[%MINECARTS%]}]}]}";
 	
 	//private static final String psngrQuiet = "{id:command_block_minecart,Command:\"gamerule commandBlockOutput false\"}";
 	private static final String cmdQuiet = "gamerule commandBlockOutput false";
@@ -1741,7 +1894,7 @@ public class S2CB extends JFrame {
 			
 			try {
 				if(sch instanceof TagCompound && (sch.getName().equals("Schematic") || 
-						(sch.getName().equals("") && ((TagCompound)sch).getTags().containsKey("DataVersion") && ((TagCompound)sch).getInteger("DataVersion") >= 1519 )) ) {
+						(sch.getName().equals("") && ((TagCompound)sch).getTags().containsKey("DataVersion") && ((TagCompound)sch).getInteger("DataVersion") >= 1519 )) ) {//1519 is 1.13,  1957 is 1.14.1 
 					out.setText("Running...");
 					out.setEditorKit(new StyledEditorKit());
 					
@@ -4262,10 +4415,6 @@ public class S2CB extends JFrame {
 					
 					if(done[x][y][z]!=DONE_DONE) {
 						Block block = data.getBlockAt(x,y,z);
-						
-						if(x==2 && y==2&& z==4) {
-							System.out.println("here");
-						}
 
 						if(block.type.isRail()) {
 							//we have a rail - need to place it
@@ -5198,15 +5347,17 @@ public class S2CB extends JFrame {
 					if(children.containsKey("Properties")){
 						TagCompound properties = state.getCompound("Properties");
 						boolean first = true;
+
 						for(ITag prop : properties.getTags().values()) {
 							if(prop instanceof TagString) {
 								String val = ((TagString) prop).getValue();
+								String propName = prop.getName();
 								//optimization to throw away 'false' properties, assuming false is the default for all 'boolean' properties
-								if(!val.equals("false")) {
+								if(!val.equals("false") || (propName.equals("lit") )) {  //campfile lit property defaults to true
 									
 									//some block optimization
 									if(name.equals("redstone_wire") && ignoreWirePower.isSelected() ) {
-										if(prop.getName().equals("power"))
+										if(propName.equals("power"))
 											continue;
 										if(val.equals("none")) //this will reduce the wire shape properties to only those actually needed
 											continue;
@@ -5217,7 +5368,7 @@ public class S2CB extends JFrame {
 									}else {
 										first = false;
 									}
-									sb.append(prop.getName());
+									sb.append(propName);
 									sb.append("=");
 									sb.append(val);
 								}
