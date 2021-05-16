@@ -19,8 +19,9 @@ limitations under the License.
 
 */
 
-import java.util.ArrayList;
+
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 
 import javax.swing.JTextPane;
@@ -29,11 +30,12 @@ import javax.swing.SwingUtilities;
 import s2cb.S2CB.Block;
 import s2cb.S2CB.SchematicData;
 
-import com.evilco.mc.nbt.error.TagNotFoundException;
-import com.evilco.mc.nbt.error.UnexpectedTagTypeException;
-import com.evilco.mc.nbt.tag.*;
-import com.sun.corba.se.spi.legacy.connection.GetEndPointInfoAgainException;
+import net.querz.nbt.*;
+import net.querz.nbt.tag.*;
 
+
+//This was originally written for 1.13.
+//For 1.16, walls were modified from <direction>=true/false to <direction>=none/low(normal)/high(solid wall).  For this conversion, we will always convert to low as that is how walls would have worked / looked before 1.13.
 
 
 public class SchematicConverter {
@@ -107,7 +109,7 @@ public class SchematicConverter {
 	};
 	
 	
-	//item name for (id - 256).  It's missing some newer items, but those version should be storing names and so won't need this list.
+	//item name for (id - 256).  It's missing some newer items, but those versions should be storing names and so won't need this list.
 	//name may need to be fixed, as this are likely the old names and not the 1.13 names
 	public static final String[] items = { 
 		"iron_shovel","iron_pickaxe","iron_axe","flint_and_steel","apple","bow","arrow","coal",
@@ -431,6 +433,7 @@ public class SchematicConverter {
 		itemMapping.put(new Item("fish",3),"pufferfish");
 		itemMapping.put(new Item("cooked_fish",0),"cooked_cod");
 		itemMapping.put(new Item("cooked_fish",1),"cooked_salmon");
+		//is this not correct?
 		itemMapping.put(new Item("dye",0),"bone_meal");//white_dye for 1.14
 		itemMapping.put(new Item("dye",1),"orange_dye");
 		itemMapping.put(new Item("dye",2),"magenta_dye");
@@ -447,6 +450,7 @@ public class SchematicConverter {
 		itemMapping.put(new Item("dye",13),"cactus_green");//green_dye for 1.14
 		itemMapping.put(new Item("dye",14),"rose_red");//red_dye for 1.14
 		itemMapping.put(new Item("dye",15),"ink_sac");//black_dye for 1.14
+		
 		itemMapping.put(new Item("bed",0),"white_bed");
 		itemMapping.put(new Item("bed",1),"orange_bed");
 		itemMapping.put(new Item("bed",2),"magenta_bed");
@@ -545,24 +549,30 @@ public class SchematicConverter {
 	}
 	
 	HashMap<Block,Block> blockCache = new HashMap<Block,Block>();
-	HashMap<Integer,TagCompound> tileEntCache = new HashMap<Integer,TagCompound>();
+	HashMap<Integer,CompoundTag> tileEntCache = new HashMap<Integer,CompoundTag>();
 	
 	public static final int BANNER_CONVERT_BASE = 0x1;
 	public static final int BANNER_CONVERT_PATTERN = 0x2;
 	
 	int bannerHandling = 0;
+	boolean redstoneDotsToPluses = true;
+	boolean ignoreWirePower = false;
 	
-	public SchematicConverter(int bannerHandling) {
+	public SchematicConverter(int bannerHandling, boolean restoneDotToPlus, boolean ignoreRedstoneWirePower) {
 		this.bannerHandling = bannerHandling;
+		this.redstoneDotsToPluses = restoneDotToPlus;
+		this.ignoreWirePower = ignoreRedstoneWirePower;
 	}
 
-	public void convert(SchematicData data, byte[] blocks, byte[] bdata, List<TagCompound> tileEntities,  int w, int h, int l, JTextPane area) {
+	public void schematicToModern(SchematicData data, byte[] blocks, byte[] bdata, ListTag<?> tileEntities,  int w, int h, int l, JTextPane area) {
 		
 		buildTileEntCache(tileEntities);
 		
 		for(int y=0;y<h;y++) {
 			for(int x=0;x<w;x++) {
 				for(int z=0;z<l;z++) {
+					
+					
 					
 					Block bl = getBlock(x,y,z,blocks,bdata,tileEntities,w,h,l);
 					
@@ -600,7 +610,7 @@ public class SchematicConverter {
 		tileEntCache.clear();
 	}
 
-	public Block getBlock(int x, int y, int z, byte[] blocks, byte[] bdata, List<TagCompound> tileEntities, int w, int h, int l) {
+	public Block getBlock(int x, int y, int z, byte[] blocks, byte[] bdata, ListTag<?> tileEntities, int w, int h, int l) {
 		
 		Block block = new Block();
 		
@@ -706,12 +716,12 @@ public class SchematicConverter {
 					int note = 0;
 					boolean powered = false;
 					try {
-						TagCompound info = getBlockEntityData( x, y, z);
+						CompoundTag info = getBlockEntityData( x, y, z);
 						if(info != null) {
 							note = info.getByte("note");
 							powered = info.getByte("powered") > 0;
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad note block tile entity at "+x+","+y+","+z+" : "+e.getMessage());
 					}
 					block.properties = "note=" + note +",powered=" + Boolean.toString(powered);
@@ -721,13 +731,13 @@ public class SchematicConverter {
 				{
 					String color = "red";
 					try {
-						TagCompound info = getBlockEntityData(x,y,z);
+						CompoundTag info = getBlockEntityData(x,y,z);
 						if(info != null) {
-							int c = info.getInteger("color");
+							int c = info.getInt("color");
 							
 							color = getColorName(c);
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad tile entity at "+x+","+y+","+z);
 						e.printStackTrace();
 					}
@@ -863,11 +873,11 @@ public class SchematicConverter {
 				block.type = S2CB.BLOCK_TYPES.get("fire");
 				{
 					//not sure if this is necessary
-					block.compound = new TagCompound("fire");
-					TagCompound nbt = new TagCompound("nbt");
-					nbt.setParent(block.compound);
-					TagInteger age = new TagInteger("age",blockdata);
-					age.setParent(nbt);
+					block.compound = new CompoundTag();//fire
+					CompoundTag nbt = new CompoundTag();//nbt
+					block.compound.put("nbt", nbt);
+					IntTag age = new IntTag(blockdata);
+					nbt.put("age", age);
 				}
 				break;
 			case 53:
@@ -921,14 +931,16 @@ public class SchematicConverter {
 			case 55:
 				block.type = S2CB.BLOCK_TYPES.get("redstone_wire");
 				{
-
-					String prop = "power=" + blockdata;
-					prop += ",south=";
+					String prop = "";
+					boolean isdot = true;
+					prop += "south=";
 					if(isRedstonePart(getBlockAt(x,y,z+1,blocks,w,h,l)) ||
 							getBlockAt(x,y-1,z+1,blocks,w,h,l) == 55) {
 						prop += "side";
+						isdot = false;
 					}else if(getBlockAt(x,y+1,z+1,blocks,w,h,l) == 55){
 						prop += "up";
+						isdot = false;
 					}else {
 						prop += "none";
 					}
@@ -936,8 +948,10 @@ public class SchematicConverter {
 					if(isRedstonePart(getBlockAt(x,y,z-1,blocks,w,h,l)) || 
 							getBlockAt(x,y-1,z-1,blocks,w,h,l) == 55) {
 						prop += "side";
+						isdot = false;
 					}else if(getBlockAt(x,y+1,z-1,blocks,w,h,l) == 55){
 						prop += "up";
+						isdot = false;
 					}else {
 						prop += "none";
 					}
@@ -945,8 +959,10 @@ public class SchematicConverter {
 					if(isRedstonePart(getBlockAt(x+1,y,z,blocks,w,h,l)) || 
 							getBlockAt(x+1,y-1,z,blocks,w,h,l) == 55) {
 						prop += "side";
+						isdot = false;
 					}else if(getBlockAt(x+1,y+1,z,blocks,w,h,l) == 55){
 						prop += "up";
+						isdot = false;
 					}else {
 						prop += "none";
 					}
@@ -954,10 +970,21 @@ public class SchematicConverter {
 					if(isRedstonePart(getBlockAt(x-1,y,z,blocks,w,h,l)) || 
 							getBlockAt(x-1,y-1,z,blocks,w,h,l) == 55) {
 						prop += "side";
+						isdot = false;
 					}else if(getBlockAt(x-1,y+1,z,blocks,w,h,l) == 55){
 						prop += "up";
+						isdot = false;
 					}else {
 						prop += "none";
+					}
+					if(isdot && redstoneDotsToPluses) {
+						prop = "south=side,north=side,east=side,west=side";
+					}
+					if(blockdata>0 && !ignoreWirePower ) {
+						if(prop.length()>0) {
+							prop += ",";
+						}
+						prop += "power=" + blockdata;
 					}
 					block.properties = prop;
 				}
@@ -972,14 +999,14 @@ public class SchematicConverter {
 				break;
 			case 61:
 				block.type = S2CB.BLOCK_TYPES.get("furnace");
-				block.properties = "lit=false,facing=" + getBlockDirection(blockdata);
+				block.properties = "lit=false,facing=" + getBlockDirection(blockdata,false);
 				break;
 			case 62:
 				block.type = S2CB.BLOCK_TYPES.get("furnace");
-				block.properties = "lit=true,facing=" + getBlockDirection(blockdata);
+				block.properties = "lit=true,facing=" + getBlockDirection(blockdata,false);
 				break;
 			case 63:
-				block.type = S2CB.BLOCK_TYPES.get("sign");
+				block.type = S2CB.BLOCK_TYPES.get("oak_sign");
 				block.properties = "rotation=" + blockdata;
 				break;
 			case 64:
@@ -1013,7 +1040,7 @@ public class SchematicConverter {
 				block.properties = getStairProps(blockdata, x, y, z, blocks, w, h, l, bdata);
 				break;
 			case 68:
-				block.type = S2CB.BLOCK_TYPES.get("wall_sign");
+				block.type = S2CB.BLOCK_TYPES.get("oak_wall_sign");
 				block.properties = "facing=" + getBlockDirection(blockdata);
 				break;
 			case 69:
@@ -1374,7 +1401,7 @@ public class SchematicConverter {
 			case 140:
 				name = "flower_pot";
 				{
-					//saved flower is in block entity, but not in a straightfoward way
+					//saved flower is in block entity, but not in a straightforward way
 					/*
 contents		item		data
 empty			air			0
@@ -1401,47 +1428,56 @@ fern			tallgrass	2
 cactus			cactus		0
 					 */
 					try {
-						TagCompound info = getBlockEntityData(x,y,z);
+						CompoundTag info = getBlockEntityData(x,y,z);
 						if(info !=null) {
-							int data = info.getInteger("Data");
-							String item = info.getString("Item");
+							int data = info.getInt("Data");
+							String item = "";
+							if(info.get("Item") instanceof StringTag) {
+								info.getString("Item");
+							}else if(info.get("Item") instanceof IntTag) {
+								//rare, but I found at least one .schematic with a mix of string and int tags
+								item = materials[info.getInt("Item")];
+							}else {
+								item = "air";
+							}
 							if(item.startsWith("minecraft:")) {
 								item = item.substring(10);
 							}
 							switch(item) {
-							case "air": break;
-							case "red_flower":
-								switch(data) {
-								default: name = "potted_poppy"; break;
-								case 1: name = "potted_blue_orchid"; break;
-								case 2: name = "potted_allium"; break;
-								case 3: name = "potted_azure_bluet"; break;
-								case 4: name = "potted_red_tulip"; break;
-								case 5: name = "potted_orange_tulip"; break;
-								case 6: name = "potted_white_tulip"; break;
-								case 7: name = "potted_pink_tulip"; break;
-								case 8: name = "potted_oxeye_daisy"; break;
-								}
-								break;
-							case "yellow_flower": name = "potted_dandelion"; break;
-							case "red_mushroom": name = "potted_red_mushroom"; break;
-							case "brown_mushroom": name = "potted_brown_mushroom"; break;
-							case "sapling":
-								switch(data) {
-								default: name = "potted_oak_sapling"; break;
-								case 1: name = "potted_spruce_sapling"; break;
-								case 2: name = "potted_birch_sapling"; break;
-								case 3: name = "potted_jungle_sapling"; break;
-								case 4: name = "potted_acacia_sapling"; break;
-								case 5: name = "potted_dark_oak_sapling"; break;
-								}
-								break;
-							case "deadbush": name = "potted_dead_bush"; break;
-							case "tallgrass": name = "potted_fern"; break;
-							case "cactus": name = "potted_cactus"; break;
+								default:
+								case "air": break;
+								case "red_flower":
+									switch(data) {
+									default: name = "potted_poppy"; break;
+									case 1: name = "potted_blue_orchid"; break;
+									case 2: name = "potted_allium"; break;
+									case 3: name = "potted_azure_bluet"; break;
+									case 4: name = "potted_red_tulip"; break;
+									case 5: name = "potted_orange_tulip"; break;
+									case 6: name = "potted_white_tulip"; break;
+									case 7: name = "potted_pink_tulip"; break;
+									case 8: name = "potted_oxeye_daisy"; break;
+									}
+									break;
+								case "yellow_flower": name = "potted_dandelion"; break;
+								case "red_mushroom": name = "potted_red_mushroom"; break;
+								case "brown_mushroom": name = "potted_brown_mushroom"; break;
+								case "sapling":
+									switch(data) {
+									default: name = "potted_oak_sapling"; break;
+									case 1: name = "potted_spruce_sapling"; break;
+									case 2: name = "potted_birch_sapling"; break;
+									case 3: name = "potted_jungle_sapling"; break;
+									case 4: name = "potted_acacia_sapling"; break;
+									case 5: name = "potted_dark_oak_sapling"; break;
+									}
+									break;
+								case "deadbush": name = "potted_dead_bush"; break;
+								case "tallgrass": name = "potted_fern"; break;
+								case "cactus": name = "potted_cactus"; break;
 							}
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad tile entity at "+x+","+y+","+z);
 						e.printStackTrace();
 					}
@@ -1472,7 +1508,7 @@ cactus			cactus		0
 				name = "wither_skeleton_@skull";
 				{
 					try {
-						TagCompound info = getBlockEntityData(x,y,z);
+						CompoundTag info = getBlockEntityData(x,y,z);
 						if(info !=null) {
 							byte rot = info.getByte("Rot");
 							byte type = info.getByte("SkullType");
@@ -1526,7 +1562,7 @@ cactus			cactus		0
 							}
 							
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad tile entity at "+x+","+y+","+z);
 						e.printStackTrace();
 					}
@@ -1699,13 +1735,13 @@ cactus			cactus		0
 				break;
 			case 176: 
 				{
-					TagCompound info = getBlockEntityData( x, y, z);
+					CompoundTag info = getBlockEntityData( x, y, z);
 					int color = 0;
 					try {
-						if(info!=null) {
-							color = info.getInteger("Base");
+						if(info!=null && info.containsKey("Base")) {
+							color = info.getInt("Base");
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad tile entity at "+x+","+y+","+z);
 						e.printStackTrace();
 					}
@@ -1717,21 +1753,28 @@ cactus			cactus		0
 					block.type = S2CB.BLOCK_TYPES.get(getColorName(color) + "_banner"); //why mess with colors?
 					block.properties = "rotation=" + blockdata;
 					
-					if(info!=null && info.getTags().containsKey("Patterns")) {
-						List<TagCompound> patternlist;
+					if(info!=null && info.containsKey("Patterns") && info.getListTag("Patterns").size() > 0) {
 						try {
-							patternlist = info.getList("Patterns", TagCompound.class);
-							for(TagCompound pat : patternlist ) {
-								if(pat.getTags().containsKey("Color")) {
-									TagInteger colortag = (TagInteger) pat.getTag("Color");
-									color = colortag.getValue();
-									if((this.bannerHandling & BANNER_CONVERT_PATTERN) != 0) {
-										color = 15 - color;
+							ListTag patternlist = info.getListTag("Patterns").asCompoundTagList();
+							Iterator it = patternlist.iterator();
+							while(it.hasNext()) {
+								Object o = it.next();
+								if(o instanceof CompoundTag) {
+									CompoundTag pat = (CompoundTag)o;
+									if(pat.containsKey("Color")) {
+										IntTag colortag = (IntTag) pat.getIntTag("Color");
+										color = colortag.asInt();
+										if((this.bannerHandling & BANNER_CONVERT_PATTERN) != 0) {
+											color = 15 - color;
+										}
+										colortag.setValue(color);  //for some reason, the color tags are shared, so need to replace whole object instead of changing value, as that could effect other tags that share the 'base' tag.
+										//pat.remove("Color");
+										//IntTag newColor = new IntTag(color);
+										//pat.put("Color", newColor);
 									}
-									colortag.setValue(color);  
 								}
 							}
-						} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+						} catch (Exception e) {
 							System.out.println("bad tile entity at "+x+","+y+","+z);
 						}
 					}
@@ -1739,13 +1782,13 @@ cactus			cactus		0
 				break;
 			case 177: 
 				{
-					TagCompound info = getBlockEntityData( x, y, z);
+					CompoundTag info = getBlockEntityData( x, y, z);
 					int color = 0;
 					try {
 						if(info!=null) {
-							color = info.getInteger("Base");
+							color = info.getInt("Base");
 						}
-					}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+					}catch (Exception e) {
 						System.out.println("bad tile entity at "+x+","+y+","+z);
 						e.printStackTrace();
 					}
@@ -1758,21 +1801,30 @@ cactus			cactus		0
 					block.type = S2CB.BLOCK_TYPES.get(getColorName(color) + "_wall_banner");
 					block.properties = "facing=" + getBlockDirection(blockdata);
 					
-					if(info!=null && info.getTags().containsKey("Patterns")) {
-						List<TagCompound> patternlist;
+					if(info!=null && info.containsKey("Patterns") && info.getListTag("Patterns").size() > 0) {
 						try {
-							patternlist = info.getList("Patterns", TagCompound.class);
-							for(TagCompound pat : patternlist ) {
-								if(pat.getTags().containsKey("Color")) {
-									TagInteger colortag = (TagInteger) pat.getTag("Color");
-									color = colortag.getValue();
-									if((this.bannerHandling & BANNER_CONVERT_PATTERN) != 0) {
-										color = 15 - color;
+							ListTag<?> patternlist = info.getListTag("Patterns").asCompoundTagList();
+							Iterator<?> it = patternlist.iterator();
+							while(it.hasNext()) {
+								Object o = it.next();
+								if(o instanceof CompoundTag) {
+									CompoundTag pat = (CompoundTag)o;
+									if(pat.containsKey("Color")) {
+										IntTag colortag = (IntTag) pat.getIntTag("Color");
+										color = colortag.asInt();
+										if((this.bannerHandling & BANNER_CONVERT_PATTERN) != 0) {
+											color = 15 - color;
+										}
+										
+										colortag.setValue(color);  //for some reason, the color tags are shared, so need to replace whole object instead of changing value, as that could effect other tags that share the 'base' tag.
+										//pat.remove("Color");
+										//IntTag newColor = new IntTag(color);
+										//pat.put("Color", newColor);
+										  
 									}
-									colortag.setValue(color);  
 								}
 							}
-						} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+						} catch (Exception e) {
 							System.out.println("bad tile entity at "+x+","+y+","+z);
 						}
 					}
@@ -1971,12 +2023,12 @@ cactus			cactus		0
 				break;
 		}
 		
+		
 		//add block entity data to the block
-		TagCompound data = getBlockEntityData( x, y, z);
+		CompoundTag data = getBlockEntityData( x, y, z);
 		if(data != null) {
-			block.compound = new TagCompound("block");
-			data.setName("nbt");
-			block.compound.setTag(data);
+			block.compound = new CompoundTag();
+			block.compound.put("nbt",data);
 		}
 		if(block.properties == null) {
 			block.properties = "";
@@ -2047,37 +2099,41 @@ cactus			cactus		0
 		}
 	}
 	
-	private int getLocation(int x, int y, int z) {
+	public static int getLocation(int x, int y, int z) {
 		return ((y)<<24) + ((z)<<12) + (x);
 	}
 	
-	private void buildTileEntCache(List<TagCompound> tileEntities) {
-		for(TagCompound te:tileEntities) {
-    		
-			int x=0,y=0,z=0;
-    		try {
-    			x = te.getInteger("x");
-    			y = te.getInteger("y");
-    			z = te.getInteger("z");
-    			
-    			tileEntCache.put(getLocation(x,y,z), te);
-    		}catch (UnexpectedTagTypeException | TagNotFoundException e) {
-				System.out.println("bad tile entity at "+x+","+y+","+z);
-				e.printStackTrace();
-			}
+	private void buildTileEntCache(ListTag tileEntities) {
+		Iterator<Tag<?>> it = tileEntities.iterator();
+		while(it.hasNext()) {
+    		Tag<?> next = it.next();
+    		if(next instanceof CompoundTag) {
+				CompoundTag te = (CompoundTag)next;
+				int x=0,y=0,z=0;
+	    		try {
+	    			x = te.getInt("x");
+	    			y = te.getInt("y");
+	    			z = te.getInt("z");
+	    			
+	    			tileEntCache.put(getLocation(x,y,z), te);
+	    		}catch (Exception e) {
+					System.out.println("bad tile entity at "+x+","+y+","+z);
+					e.printStackTrace();
+				}
+    		}
 		}	
 	}
 	
-	private TagCompound getBlockEntityData(int x, int y, int z) {
+	private CompoundTag getBlockEntityData(int x, int y, int z) {
 		
-    	TagCompound te = tileEntCache.get(getLocation(x,y,z));
+		CompoundTag te = tileEntCache.get(getLocation(x,y,z));
 		try {
-			if(te!=null && te.getInteger("x")==x && te.getInteger("y")==y && te.getInteger("z")==z /*&& te.getString("id").equalsIgnoreCase(blocktype)*/) {
+			if(te!=null && te.getInt("x")==x && te.getInt("y")==y && te.getInt("z")==z /*&& te.getString("id").equalsIgnoreCase(blocktype)*/) {
 
 				fixEntity(te);
 				return te;
 			}
-		} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+		} catch (Exception e) {
 			System.out.println("bad tile entity at "+x+","+y+","+z);
 			e.printStackTrace();
 		}
@@ -2391,10 +2447,9 @@ cactus			cactus		0
 				south = south || ((materialIssue[southblock>-1?southblock:0]) & tr) == 0;
 				east = east || ((materialIssue[eastblock>-1?eastblock:0]) & tr) == 0;
 				west = west || ((materialIssue[westblock>-1?westblock:0]) & tr) == 0;
-		
-		return "north=" + Boolean.toString(north) + ",south=" + Boolean.toString(south) +
-				",east=" + Boolean.toString(east) + ",west=" + Boolean.toString(west) +
-				",up=" + Boolean.toString(up); 
+				
+		//return "north=" + Boolean.toString(north) + ",south=" + Boolean.toString(south) + ",east=" + Boolean.toString(east) + ",west=" + Boolean.toString(west) + ",up=" + Boolean.toString(up); //1.13 
+		return "north=" + (north?"low":"none") + ",south=" + (south?"low":"none") + ",east=" + (east?"low":"none") + ",west=" + (west?"low":"none") + ",up=" + Boolean.toString(up); //1.16
 	}
 	
 	public static String getChorusProperties(int blockdata, int x, int y, int z, byte[] blocks, int w, int h, int l) {
@@ -2416,37 +2471,38 @@ cactus			cactus		0
 	}
 	
 	
-	private void fixEntities(List<TagCompound> entities,boolean mob) {
+	private void fixEntities(ListTag entities,boolean mob) {
 		//fix entities - correcting id name changes, and other issues so that we can handle them in 1.13
 		
 		try {
-			for(TagCompound ent:entities) {
+			for(Object ent:entities) {
+				if(ent instanceof CompoundTag)
 				
-				fixEntity(ent,mob);
+					fixEntity((CompoundTag)ent,mob);
 				
 			}
 			
-		}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+		}catch (Exception e) {
 			System.out.println("bad entity! ");
 			e.printStackTrace();
 		}
 		
 	}
 	
-	private void fixEntity(TagCompound ent) throws UnexpectedTagTypeException, TagNotFoundException {
+	private void fixEntity(CompoundTag ent) throws Exception {
 		fixEntity(ent,false);
 	}
 
 
-	private void fixEntity(TagCompound ent,boolean mob) throws UnexpectedTagTypeException, TagNotFoundException {
+	private void fixEntity(CompoundTag ent,boolean mob) throws Exception {
 		String name = "";
-		TagString itemid = null;
-		if(ent.getTags().get("id") instanceof TagString) {
-			itemid = (TagString) ent.getTag("id");
+		StringTag itemid = null;
+		if(ent.get("id") instanceof StringTag) {
+			itemid = (StringTag) ent.get("id");
 			name = itemid.getValue();
-		}else if(ent.getTags().get("id") instanceof TagShort) {
-			TagShort iid = (TagShort) ent.getTag("id");
-			int val = iid.getValue();
+		}else if(ent.get("id") instanceof ShortTag) {
+			ShortTag iid = (ShortTag) ent.getShortTag("id");
+			int val = iid.asShort();
 			if(val < 256) {
 				name = materials[val];
 			}else if(val < 448) {
@@ -2467,13 +2523,13 @@ cactus			cactus		0
 				case 11: name = "music_disc_wait"; break;
 				}
 			}
-			ent.removeTag(iid);
-			itemid = new TagString("id",name);
-			ent.setTag(itemid);
+			ent.remove("id");
+			itemid = new StringTag(name);
+			ent.put("id",itemid);
 		}
 		
 		int damage = 0;
-		if(ent.getTags().containsKey("Damage")) {
+		if(ent.containsKey("Damage")) {
 			damage = ent.getShort("Damage");
 		}
 		
@@ -2484,6 +2540,8 @@ cactus			cactus		0
 		if(S2CB.entityNameMap.keySet().contains(name) && itemid != null) {
 			name = S2CB.entityNameMap.get(name);
 			itemid.setValue(name);
+			//ent.remove("id");
+			//ent.put("id", new StringTag(name)); //not sure if this is necessary, but I had issues with banner base colors when re-using tags
 		}
 		
 		if(!mob && itemid != null) {
@@ -2491,17 +2549,20 @@ cactus			cactus		0
 			if(itemMapping.containsKey(item)) {
 				name = itemMapping.get(item);
 				itemid.setValue("minecraft:" + name);
+				//ent.remove("id");
+				//ent.put("id", new StringTag("minecraft:" + name)); //not sure if this is necessary, but I had issues with banner base colors when re-using tags
 			}
 			
 		}else {
 			if(name.contains("shulker")) {
-				ent.removeTag("APX");
-				ent.removeTag("APY");
-				ent.removeTag("APZ");
+				ent.remove("APX");
+				ent.remove("APY");
+				ent.remove("APZ");
 			}
 		}
 		
-		if(name.toLowerCase().contains("banner")) {
+		if(name.toLowerCase().contains("banner") && !ent.containsKey("Base")) {
+			//this should only modify banner items, which won't have a Base property 
 			
 			int color = damage;
 			//need to invert the value as banners originally they were stored inverted, but no longer in 1.13 (?)  Patterns may also need to be inverted, depending on minecraft version?  Leaving as an option for now.  
@@ -2509,24 +2570,27 @@ cactus			cactus		0
 				color = 15 - color;
 			}
 			
-			if(ent.getTag("Base")==null) {
-				ent.setTag(new TagInteger("Base",color));
-			}
+			//items shouldn't have patterns directly...  //TODO maybe fix later if we find an issue
 			// iterate through patterns fixing colors.  tag(compound)->BlockEntityTag(compound)->Patterns(list)->compound->Color(int)
-			if(ent.getTags().containsKey("tag")) {
-				TagCompound tag = ent.getCompound("tag");
-				if(tag.getTags().containsKey("BlockEntityTag")) {
-					TagCompound bet = tag.getCompound("BlockEntityTag");
-					if(bet.getTags().containsKey("Patterns")) {
-						List<TagCompound> patternlist = bet.getList("Patterns", TagCompound.class);
-						for(TagCompound pat : patternlist ) {
-							if(pat.getTags().containsKey("Color")) {
-								TagInteger colorTag = (TagInteger) pat.getTag("Color");
-								color = colorTag.getValue();
+			if(ent.containsKey("tag")) {
+				CompoundTag tag = ent.getCompoundTag("tag");
+				if(tag.containsKey("BlockEntityTag")) {
+					CompoundTag bet = tag.getCompoundTag("BlockEntityTag");
+					if(bet.containsKey("Patterns")) {
+						ListTag patternlist = bet.getListTag("Patterns");
+						for(Object o : patternlist ) {
+							if(o instanceof CompoundTag && ((CompoundTag)o).containsKey("Color")) {
+								CompoundTag pat = ((CompoundTag)o);
+								IntTag colorTag = pat.getIntTag("Color");
+								color = colorTag.asInt();
 								if((this.bannerHandling & BANNER_CONVERT_PATTERN) != 0) {
 									color = 15 - color;
 								}
 								colorTag.setValue(color); //need to invert the value as banners originally they were stored inverted, but no longer in 1.13 
+								//colortag.setValue(color);  //for some reason, the color tags are shared, so need to replace whole object instead of changing value, as that could effect other tags that share the 'base' tag.
+								//pat.remove("Color");
+								//IntTag newColor = new IntTag(color);
+								//pat.put("Color", newColor);
 							}
 						}
 					}
@@ -2537,8 +2601,8 @@ cactus			cactus		0
 		
 
 		
-		if(ent.getTags().containsKey("Motive")) {
-			TagString motive = (TagString)ent.getTag("Motive");
+		if(ent.containsKey("Motive")) {
+			StringTag motive = ent.getStringTag("Motive");
 			String m = motive.getValue();
 			if(m.equalsIgnoreCase("burningskull")) {
 				m = "burning_skull";
@@ -2553,55 +2617,64 @@ cactus			cactus		0
 		}
 		
 		if(name.contains("item_frame")) {
-			if(ent.getTags().containsKey("Facing")) {
-				TagByte facing = (TagByte)ent.getTag("Facing");
+			if(ent.containsKey("Facing")) {
+				ByteTag facing = ent.getByteTag("Facing");
 				//1.12 - 0 is south, 1 is west, 2 is north, and 3 is east.
 				//1.13 - 3 is south, 4 is west, 2 is north, and 5 is east.  With 1 being up and 0 being down.
 				
-				switch(facing.getValue()) {
+				/*
+				switch(facing.asByte()) {
 				case 0: facing.setValue((byte) 3); break;
 				case 1: facing.setValue((byte) 4); break;
 				case 2: facing.setValue((byte) 2); break;
 				case 3: facing.setValue((byte) 5); break;
 				}
+				*/
+				//not sure if this is necessary, but I had issues with banner base colors when re-using tags
+				ent.remove("Facing");
+				switch(facing.asByte()) {
+				case 0: ent.put("Facing", new ByteTag((byte)3)); break;
+				case 1: ent.put("Facing", new ByteTag((byte)4)); break;
+				case 2: ent.put("Facing", new ByteTag((byte)2)); break;
+				case 3: ent.put("Facing", new ByteTag((byte)5)); break;
+				}
 			}
 		}
 		
-		if(ent.getTags().containsKey("Pos")) {
-			TagList tag = (TagList)ent.getTag("Pos");
-			List<ITag> list = tag.getTags();
-			if(list.get(0) instanceof TagDouble) {
+		if(ent.containsKey("Pos")) {
+			ListTag tag = ent.getListTag("Pos");
+			if(tag.get(0) instanceof DoubleTag) {
 				//this is a valid position list.  We need to update the position because running commands in a command block causes a 1/2 block offset (I think).
-				TagDouble x = (TagDouble)list.get(0);
-				x.setValue(x.getValue() - 0.5);
-				TagDouble z = (TagDouble)list.get(2);
-				z.setValue(z.getValue() - 0.5);
+				DoubleTag x = (DoubleTag)tag.get(0);
+				x.setValue(x.asDouble() - 0.5);
+				DoubleTag z = (DoubleTag)tag.get(2);
+				z.setValue(z.asDouble() - 0.5);
 			}
 		}
 		
 		
-		if(ent.getTags().containsKey("Items")) {
+		if(ent.containsKey("Items")) {
 			//has an inventory of some sort - chest, shulker box, furnace, etc. - need to fix old item ids
-			List<TagCompound> list = ent.getList("Items", TagCompound.class);
+			ListTag list = ent.getListTag("Items");
 			
-			for(TagCompound it:list) {
-				if(it.getTags().containsKey("id")) {
+			for(Object o:list) {
+				if(o instanceof CompoundTag && ((CompoundTag)o).containsKey("id")) {
 					
-					fixEntity(it);
+					fixEntity((CompoundTag)o);
 					
 				}
 			}
 		}
 		
-		if(ent.getTags().containsKey("Item")) {
-			ITag it = ent.getTag("Item");
+		if(ent.containsKey("Item")) {
+			Tag<?> it = ent.get("Item");
 			
-			if(it instanceof TagCompound) {
-				TagCompound itm =(TagCompound)it;
+			if(it instanceof CompoundTag) {
+				CompoundTag itm =(CompoundTag)it;
 			
 				fixEntity(itm);
-			} else if(it instanceof TagString) {
-				TagString itm = (TagString)it;
+			} else if(it instanceof StringTag) {
+				StringTag itm = (StringTag)it;
 				String itemstr = itm.getValue();
 				if(S2CB.entityNameMap.keySet().contains(itemstr)) {
 					itm.setValue(S2CB.entityNameMap.get(itemstr));
@@ -2610,16 +2683,16 @@ cactus			cactus		0
 			
 		}
 		
-		if(ent.getTags().containsKey("DecorItem")) {
+		if(ent.containsKey("DecorItem")) {
 			//llama carpet
-			ITag it = ent.getTag("DecorItem");
+			Tag<?> it = ent.get("DecorItem");
 			
-			if(it instanceof TagCompound) {
-				TagCompound itm =(TagCompound)it;
+			if(it instanceof CompoundTag) {
+				CompoundTag itm =(CompoundTag)it;
 			
 				fixEntity(itm);
-			} else if(it instanceof TagString) {
-				TagString itm = (TagString)it;
+			} else if(it instanceof StringTag) {
+				StringTag itm = (StringTag)it;
 				String itemstr = itm.getValue();
 				if(S2CB.entityNameMap.keySet().contains(itemstr)) {
 					itm.setValue(S2CB.entityNameMap.get(itemstr));
@@ -2628,31 +2701,32 @@ cactus			cactus		0
 			
 		}
 		
-		if(ent.getTags().containsKey("carried")) {
+		if(ent.containsKey("carried")) {
 			//enderman carried block - only converting the block id for now - state shouldn't matter (much)
 			int block = ent.getShort("carried");
-			ent.removeTag("carried");
-			TagCompound carried = new TagCompound("carriedBlockState");
-			TagString nametag = new TagString("Name",materials[block]);
-			carried.setTag(nametag);
-			ent.setTag(carried);
+			ent.remove("carried");
+			CompoundTag carried = new CompoundTag();
+			StringTag nametag = new StringTag(materials[block]);
+			carried.put("Name",nametag);
+			ent.put("carriedBlockState",carried);
 		}
 		
 		
 		
-		if(ent.getTags().containsKey("ArmorItems")) {
-			List<TagCompound> list = ent.getList("ArmorItems", TagCompound.class);
+		if(ent.containsKey("ArmorItems")) {
+			ListTag list = ent.getListTag("ArmorItems");
 			//TagList armorItems = ent.getTag("ArmorItems", TagList.class);
-			for(TagCompound armor:list) {
+			for(Object o:list) {
 				try {
-					if(armor.getTags().isEmpty()) {
+					CompoundTag armor = (CompoundTag)o;
+					if(armor.size() == 0) {
 						//armorItems.removeTag(armor); //just skip an empty item - it just an empty armor slot
 						continue;
 					}
 					
 					fixEntity(armor);
 					
-				}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+				}catch (Exception e) {
 					System.out.println("bad armor item! ");
 					e.printStackTrace();
 				}
@@ -2660,37 +2734,39 @@ cactus			cactus		0
 		}
 		
 		
-		if(ent.getTags().containsKey("HandItems")) {
-			List<TagCompound> list = ent.getList("HandItems", TagCompound.class);
+		if(ent.containsKey("HandItems")) {
+			ListTag list = ent.getListTag("HandItems");
 			//TagList handItems = ent.getTag("HandItems", TagList.class);
-			for(TagCompound hand:list) {
+			for(Object o:list) {
 				try {
-					if(hand.getTags().isEmpty()) {
+					CompoundTag hand =(CompoundTag)o;
+					if(hand.size()==0) {
 						//handItems.removeTag(hand);//just skip an empty item - it just an empty hand slot (left or right hand is empty)
 						continue;
 					}
 					
 					fixEntity(hand);
-				}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+				}catch (Exception e) {
 					System.out.println("bad hand item! ");
 					e.printStackTrace();
 				}
 			}
 		}
 		
-		if(ent.getTags().containsKey("Equipment")) {
+		if(ent.containsKey("Equipment")) {
 			//this isn't correct, but main program will convert into hand and armor items, but we still need to fix any name changes (specifically skull)
-			List<TagCompound> list = ent.getList("Equipment", TagCompound.class);
-			for(TagCompound armor:list) {
+			ListTag list = ent.getListTag("Equipment");
+			for(Object o:list) {
 				try {
-					if(armor.getTags().isEmpty()) {
+					CompoundTag  armor = (CompoundTag)o; 
+					if(armor.size()==0) {
 						//just skip an empty item - it just an empty armor slot
 						continue;
 					}
 					
 					fixEntity(armor);
 					
-				}catch (UnexpectedTagTypeException | TagNotFoundException e) {
+				}catch (Exception e) {
 					System.out.println("bad armor item! ");
 					e.printStackTrace();
 				}
@@ -2699,10 +2775,10 @@ cactus			cactus		0
 		
 		
 		if(name.equals("spawn_egg")) {
-			if(ent.getTags().containsKey("tag")) {
-				TagCompound tag = ent.getCompound("tag");
-				if(tag.getTags().containsKey("EntityTag")) {
-					TagCompound et = tag.getCompound("EntityTag");
+			if(ent.containsKey("tag")) {
+				CompoundTag tag = ent.getCompoundTag("tag");
+				if(tag.containsKey("EntityTag")) {
+					CompoundTag et = tag.getCompoundTag("EntityTag");
 					String entname = et.getString("id");
 					if(entname.startsWith("minecraft:")) {
 						entname = entname.substring(10);
@@ -2710,34 +2786,42 @@ cactus			cactus		0
 					if(S2CB.entityNameMap.keySet().contains(entname)) {
 						entname = S2CB.entityNameMap.get(entname);
 					}
-					TagString itmid = ent.getTag("id",TagString.class);
+					StringTag itmid = ent.getStringTag("id");
+					if(itmid==null) {
+						itmid = new StringTag();
+						ent.put("id", itmid);
+					}
 					itmid.setValue("minecraft:"+entname.toLowerCase()+"_spawn_egg");
-					ent.removeTag("tag");
+					ent.remove("tag");
 				}
 			}
 		}
 		
-		if(ent.getTag("tag")!=null) {
+		if(ent.containsKey("tag")) {
 			
-			TagCompound tag = ent.getCompound("tag");
+			CompoundTag tag = ent.getCompoundTag("tag");
 			
-			if(tag.getTags().containsKey("ench")) {
+			if(tag.containsKey("ench")) {
 				// tag in now "Enchantment" and now the value is a string
 				try {
-					TagList ench = (TagList) tag.getTag("ench");
-					tag.removeTag(ench);
-					ench.setName("Enchantments");
-					ench.setParent(null);
-					tag.setTag(ench);//apparently setting the name removes it, so need to add it back, but first we needed to set the parent to null or it wouldn't add back correctly
-					List<TagCompound> enchs = ench.getTags(TagCompound.class);
-					for(TagCompound en : enchs) {
-						if(en.getTags().containsKey("id") && en.getTag("id") instanceof TagShort ) {
+					ListTag<?> ench = tag.getListTag("ench");
+					tag.remove("ench");
+					//ench.setName("Enchantments");
+					//ench.setParent(null);
+					//tag.setTag(ench);//apparently setting the name removes it, so need to add it back, but first we needed to set the parent to null or it wouldn't add back correctly
+					ListTag<CompoundTag> enchs = new ListTag<CompoundTag>(CompoundTag.class);
+					tag.put("Enchantments", enchs);
+					//List<TagCompound> enchs = ench.getTags(TagCompound.class);
+					for(Object o : ench) {
+						CompoundTag en = (CompoundTag)o;
+						if(en.containsKey("id") && en.get("id") instanceof ShortTag ) {
 							short idbyte = en.getShort("id");
-							en.removeTag("id");
-							String enchstr = enchantments.get(new Integer(idbyte));
-							TagString newid = new TagString("id",enchstr);
-							en.setTag(newid);
+							en.remove("id");
+							String enchstr = enchantments.get(Integer.valueOf(idbyte));
+							StringTag newid = new StringTag(enchstr);
+							en.put("id",newid);
 						}
+						enchs.add(en);
 					}
 					
 				}catch (Exception e) {
@@ -2746,17 +2830,18 @@ cactus			cactus		0
 				}
 			}
 			
-			if(tag.getTags().containsKey("StoredEnchantments")) {
+			if(tag.containsKey("StoredEnchantments")) {
 				//similar to above
 				try {
-					List<TagCompound> enchs = tag.getList("StoredEnchantments",TagCompound.class);
-					for(TagCompound en : enchs) {
-						if(en.getTags().containsKey("id") && en.getTag("id") instanceof TagShort ) {
+					ListTag enchs = tag.getListTag("StoredEnchantments");
+					for(Object o : enchs) {
+						CompoundTag en = (CompoundTag)o;
+						if(en.containsKey("id") && en.get("id") instanceof ShortTag ) {
 							short idbyte = en.getShort("id");
-							en.removeTag("id");
-							String enchstr = enchantments.get(new Integer(idbyte));
-							TagString newid = new TagString("id",enchstr);
-							en.setTag(newid);
+							en.remove("id");
+							String enchstr = enchantments.get(Integer.valueOf(idbyte));
+							StringTag newid = new StringTag(enchstr);
+							en.put("id",newid);
 						}
 					}
 					
@@ -2769,11 +2854,10 @@ cactus			cactus		0
 			fixEntity(tag); //to handle display or custom name tags inside the tag tag
 		}
 		
-		if(ent.getTags().containsKey("CustomName")) {
+		if(ent.containsKey("CustomName")) {
 			//custom names need to be quoted or in JSON text format
-			ITag cNameTag = ent.getTag("CustomName");
-			if(cNameTag instanceof TagString) {
-				TagString cname = (TagString)cNameTag;
+			if(ent.get("CustomName") instanceof StringTag) {
+				StringTag cname = ent.getStringTag("CustomName");
 				String cNameStr = cname.getValue();
 				if(!cNameStr.startsWith("\"")) {
 					cname.setValue("\""+cNameStr+"\"");
@@ -2782,27 +2866,28 @@ cactus			cactus		0
 		}
 		
 		
-		if(ent.getTags().containsKey("Riding")) {
-			fixEntity(ent.getCompound("Riding"),true);
+		if(ent.containsKey("Riding")) {
+			fixEntity(ent.getCompoundTag("Riding"),true);
 		}
-		if(ent.getTags().containsKey("Passengers")) {
-			List<TagCompound> pass = ent.getList("Passengers", TagCompound.class);
-			for(TagCompound e:pass) {
-				fixEntity(e,true);
+		if(ent.containsKey("Passengers")) {
+			ListTag pass = ent.getListTag("Passengers");
+			for(Object o:pass) {
+				if(o instanceof CompoundTag)
+				fixEntity((CompoundTag)o,true);
 			}
 		}
 		
-		if(ent.getTags().containsKey("display") && ent.getTag("display") instanceof TagCompound) {
-			TagCompound display = ent.getCompound("display");
-			if(display.getTags().containsKey("Name") && display.getTag("Name") instanceof TagString) {
-				TagString str = display.getTag("Name", TagString.class);
+		if(ent.containsKey("display") && ent.get("display") instanceof CompoundTag) {
+			CompoundTag display = ent.getCompoundTag("display");
+			if(display.containsKey("Name") && display.get("Name") instanceof StringTag) {
+				StringTag str = display.getStringTag("Name");
 				String s = str.getValue();
 				if(!s.startsWith("\"")) {
 					str.setValue("\""+s+"\"");
 				}
 			}
-			if(display.getTags().containsKey("LocName") && display.getTag("LocName") instanceof TagString) {
-				TagString str = display.getTag("LocName", TagString.class);
+			if(display.containsKey("LocName") && display.get("LocName") instanceof StringTag) {
+				StringTag str = display.getStringTag("LocName");
 				String s = str.getValue();
 				if(!s.startsWith("\"")) {
 					str.setValue("\""+s+"\"");
@@ -2811,12 +2896,43 @@ cactus			cactus		0
 			
 		}
 		
-		if(ent.getTags().containsKey("BlockEntityTag")) {
-			TagCompound bet = ent.getCompound("BlockEntityTag");
+		if(ent.containsKey("BlockEntityTag")) {
+			CompoundTag bet = ent.getCompoundTag("BlockEntityTag");
 		
 			fixEntity(bet, false);
 		}
 		
+	}
+
+	public void setOldColors() {
+		// switches the order of colors, in order to match what Alpha Minecraft used
+		
+		//remove 'classic' dyes
+		Iterator<Item> it = itemMapping.keySet().iterator();
+		while(it.hasNext()) {
+			Item i = it.next();
+			if(i.name.equals("dye")) {
+				it.remove();
+			}
+		}
+		
+		//add 'Alpha' dyes
+		itemMapping.put(new Item("dye",15),"bone_meal");//white_dye for 1.14 //leave for now as bonemeal can be converted and has other uses
+		itemMapping.put(new Item("dye",14),"orange_dye");
+		itemMapping.put(new Item("dye",13),"magenta_dye");
+		itemMapping.put(new Item("dye",12),"light_blue_dye");
+		itemMapping.put(new Item("dye",11),"yellow_dye");//yellow_dye for 1.14, was dandelion_yellow
+		itemMapping.put(new Item("dye",10),"lime_dye");
+		itemMapping.put(new Item("dye",9),"pink_dye");
+		itemMapping.put(new Item("dye",8),"gray_dye");
+		itemMapping.put(new Item("dye",7),"light_gray_dye");
+		itemMapping.put(new Item("dye",6),"cyan_dye");
+		itemMapping.put(new Item("dye",5),"purple_dye");
+		itemMapping.put(new Item("dye",4),"lapis_lazuli");//blue_dye for 1.14 //leave for now as lapis_lazuli can be converted and has other uses
+		itemMapping.put(new Item("dye",3),"cocoa_beans");//brown_dye for 1.14 //leave for now as cocoa_beans can be converted and has other uses
+		itemMapping.put(new Item("dye",2),"green_dye");//green_dye for 1.14, was cactus_green
+		itemMapping.put(new Item("dye",1),"red_dye");//red_dye for 1.14, was rose_red
+		itemMapping.put(new Item("dye",0),"ink_sac");//black_dye for 1.14 //leave for now as ink_sac can be converted and has other uses
 	}
 }
 

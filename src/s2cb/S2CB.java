@@ -1,9 +1,9 @@
 package s2cb;
 
 /*
-	Schematic To Command Block for Minecraft 1.13
+	Schematic To Command Block for Minecraft 1.16
 
-   Copyright 2018 Brian Risinger
+   Copyright 2018-2020 Brian Risinger
 
    Licensed under the Apache License, Version 2.0 (the "License");
    you may not use this file except in compliance with the License.
@@ -26,19 +26,14 @@ import java.awt.event.*;
 import java.io.*;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.text.NumberFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Collection;
-import java.util.HashMap;
-import java.util.HashSet;
+import java.time.Instant;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Stack;
-import java.util.zip.GZIPInputStream;
+import java.util.Map.Entry;
 import java.util.zip.ZipEntry;
-import java.util.zip.ZipException;
 import java.util.zip.ZipOutputStream;
 
 import javax.swing.*;
@@ -52,13 +47,11 @@ import javax.swing.text.StyledEditorKit;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 
-import org.apache.commons.lang3.ArrayUtils;
 import org.apache.commons.lang3.StringEscapeUtils;
 
-import com.evilco.mc.nbt.error.TagNotFoundException;
-import com.evilco.mc.nbt.error.UnexpectedTagTypeException;
-import com.evilco.mc.nbt.stream.NbtInputStream;
-import com.evilco.mc.nbt.tag.*;
+import fi.dy.masa.litematica.schematic.container.LitematicaBitArray;
+import net.querz.nbt.io.*;
+import net.querz.nbt.tag.*;
 
 
 //TODO: test mob placement is correct (1/2 block off?)  put bunch of chicken in 1x1 glass   -  done, the 0.5 x,z seems to help, but not completely preventing the chickens from escaping...
@@ -71,7 +64,7 @@ import com.evilco.mc.nbt.tag.*;
  * 
  * An application for converting Minecraft .schematic files (unofficial file format for saving parts of worlds used by tools like MCEdit)
  * to a series of one or more command block commands which will re-create the schematic as closely as possible. .NBT saved structure files
- * supported since 1.12
+ * supported since 1.12. Each version should support exporting command blocks structures back to 1.12 as long as newer blocks aren't in the structure. 
  * 
  * Version 1.13a for Minecraft 1.13 - For the moment no longer supporting .schematic files, .nbt saved structure files supported.
  * Well, Minecraft 1.13 happened.  This changed a lot!   
@@ -92,18 +85,44 @@ import com.evilco.mc.nbt.tag.*;
  * A bunch of fixes for NBT tags of blocks and entities, especially custom named items / mobs in the inventory of block / being worn by mobs / or passenger of another entity
  * Fixed import of experience orbs (name changed from xp_orb). 
  * 
+ * Version 1.14 for Minecraft 1.14 - never officially released as a Minecraft change broke passengers of falling sand - they now land inside whatever block the falling sand becomes, not on top
+ * This breaks the mechanism used to put a few hundred commands inside one command block.  See: https://bugs.mojang.com/browse/MC-145113
+ * Partial fix by inserting basically dead armor stands into the passenger list, so that the armor stand is a passenger of the falling sand, and the original passengers of the sand are passengers of the armor stand.
+ * This 'works' but it takes several 'ticks' for the armor stand to die. When the auto-run flying machine is used with this method, the second command block is activated before the
+ * minecarts of the first block have landed (possibly before the armor stand has fully died).  This leads basically to the the command block minecarts being spawned faster than they are removed,
+ * leading to the game badly lagging and possibly crashing if there are more than 20 or so command blocks.  Manually running command blocks will work if you wait for all the minecarts to be
+ * cleaned up before powering the next command block, but this takes several seconds, and the game still lags somewhat.  Running the data pack version is unaffected, but not possible for all users.
+ * 
+ * There was no version specifically for Minecraft 1.15.
+ * 
+ * Version 1.16 for Minecraft 1.16(.5) - No clear solution for falling block issue, but I'm going to try some things.
+ * Lots of blocks added to 1.16 (and some from 1.15) so I didn't want to get too far behind.
+ * Going to attempt to add litematic schematic support, as that seems like more of a standard schematic format now, and doesn't have the size limits of .nbt structures.
+ * While I'm at it, lets add WorldEdit (Sponge) format support as well...
+ * 
+ * 
+ * Future TODOs: we can attempt to add rotation of the schematic, in 90 degree increments.
+ * 
+ * 
  * @author Brian Risinger  aka TroZ
  *
  */
 @SuppressWarnings("serial")
 public class S2CB extends JFrame {
 	
-	private static final String programVersion = "1.13c";
-	private static final String minecraftVersion = "1.13";
+	private static final String programVersion = "1.16";
+	private static final String minecraftVersion = "1.16";
+	
+	private static final String SETTINGS_FILENAME = "s2cb.properties";
+	
+	
+	private static final int MINECRAFT_VER_1_13 = 1519;
+	//1957 is 1.14.1 - but I don't think that is relevant anyplace currently.
+	private static final int MINECRAFT_VER_1_16 = 2556;
 	
 	static final String PACK_MCMETA = "{\r\n" + 
 			"   \"pack\":{\r\n" + 
-			"      \"pack_format\":3,\r\n" + 
+			"      \"pack_format\":6,\r\n" + 
 			"      \"description\":\"S2CB Schematic to Command Block - Spawn Structure: %DESC%  - Size: %w%,%h%,%l%  Offset: %ox%,%oy%,%oz%\"\r\n" + 
 			"   }\r\n" + 
 			"}";
@@ -128,9 +147,9 @@ public class S2CB extends JFrame {
 	static final boolean intern = false;
 	
 	private JFileChooser chooser = new JFileChooser();
-	private static final String[] options = {"NONE","Dirt", "Grass", "Stone", "Cobblestone", "Sandstone", "Glass", "Barrier"};
+	private static final String[] options = {"NONE","Dirt", "Grass", "Mycelium", "Podzol", "Oak Planks", "Stone", "Cobblestone", "Smooth Stone", "Sandstone", "Glass", "Barrier", "Netherrack", "Crimson Nylium", "Warped Nylium", "Blackstone", "Gilded Blackstone", "Basalt", "Polished Basalt","Obsidian", "Crying Obsidian", "Netherite", "Shroomlight", "Sea Lantern", "Glowstone", "Redstone Blocks"};
 	private JComboBox<String> base = new JComboBox<String>(options);
-	private String[] BASE_BLOCK = {"","dirt","grass_block","stone","cobblestone","sandstone","glass","barrier"};
+	private String[] BASE_BLOCK = {"","dirt","grass_block","mycelium","podzol","oak_planks","stone","cobblestone","smooth_stone","sandstone","glass","barrier", "netherrack", "crimson_nylium", "warped_nylium", "blackstone", "gilded_blackstone", "basalt", "polished_basalt", "obsidian", "crying_obsidian", "netherite", "shroomlight","sea_lantern", "glowstone", "redstone_block"};
 	private static final String[] optMoreCmds = {"Same Cmd Block","North No Space", "North One Space", "West No Space", "West One Space", "East No Space", "East One Space", "South No Space", "South One Space", "Minecart Command Blocks"}; //take care changing this order - the order is hardcoded in places - sorry
 	private JComboBox<String> moreCmds = new JComboBox<String>(optMoreCmds);
 	private static final int[] moreCmdsX = 		{0, 0, 0, 1, 2,-1,-2, 0, 0, 0};
@@ -152,6 +171,7 @@ public class S2CB extends JFrame {
 	private JCheckBox removeMobs = new JCheckBox("No Mobs");
 	private JCheckBox removeProjectiles = new JCheckBox("No Projectiles");
 	private JCheckBox ignoreWirePower = new JCheckBox("Ignore Wire Power");
+	private JCheckBox redstoneDotsToPluses = new JCheckBox("Redstone Dots to Pluses");
 	private JCheckBox complexRails = new JCheckBox("Complex Rails");
 	private JCheckBox minimizeWater = new JCheckBox("Min Water");
 	private JCheckBox minimizeEntities = new JCheckBox("Min Entities");
@@ -174,7 +194,8 @@ public class S2CB extends JFrame {
 	
 	private NumberFormat percentFormater = NumberFormat.getInstance();
 	
-	
+	String[] SIDES_ARRAY = {"north","south","east","west"};
+	List<String> SIDES = Arrays.asList(SIDES_ARRAY);
 	
 	private SchematicData data = null;
 	
@@ -185,7 +206,8 @@ public class S2CB extends JFrame {
 	
 	
 	
-	private static String[] dangerousBlocks = {"fire", "tnt", "flowing_lava", "lava"}; 
+	private static String[] strDangerousBlocks = {"fire", "tnt", "flowing_lava", "lava"}; 
+	private static final HashSet<String> dangerousBlocks = new HashSet<String>(Arrays.asList(strDangerousBlocks));
 	
 	//private static HashMap<Integer,String> itemNames = new HashMap<Integer,String>();
 	
@@ -374,7 +396,7 @@ public class S2CB extends JFrame {
 		
 		t = new BlockType("dead_bush",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("piston",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
-		t = new BlockType("piston_head",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("piston_head",true,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t); // a piston head isn't actually air, however, we shouldn't place / fill piston heads as if the piston already exists and was updated to a retracted state, placing the piston head can get the piston in a bad state. 
 		t = new BlockType("white_wool"); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("orange_wool"); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("magenta_wool"); 	BLOCK_TYPES.put(t.name,t);
@@ -409,6 +431,7 @@ public class S2CB extends JFrame {
 		t = new BlockType("iron_block"); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("smooth_stone"); 	BLOCK_TYPES.put(t.name,t);//double-stone_slab?
 		t = new BlockType("stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("red_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("cobblestone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
@@ -439,7 +462,13 @@ public class S2CB extends JFrame {
 		t = new BlockType("wheat",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("farmland",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("furnace",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);  //no more lit_furnace
-		t = new BlockType("sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		//t = new BlockType("sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("oak_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);  BLOCK_TYPES.put("sign",t); //upgrade from 1.13 to 1.14
+		t = new BlockType("birch_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("spruce_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("jungle_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("acacia_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_oak_sign",false,true,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
 		
 		
 		t = new BlockType("oak_door",false,false,false,true,true,false,true); 	BLOCK_TYPES.put(t.name,t);
@@ -451,7 +480,13 @@ public class S2CB extends JFrame {
 		t = new BlockType("ladder",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("rail",false,false,false,false,true,true,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("cobblestone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
-		t = new BlockType("wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		//t = new BlockType("wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("oak_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);  BLOCK_TYPES.put("wall_sign",t); //upgrade from 1.13 to 1.14
+		t = new BlockType("birch_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("spruce_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("jungle_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("acacia_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_oak_wall_sign",false,true,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("lever",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("stone_pressure_plate",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("iron_door",false,false,false,true,false,false,true); 	BLOCK_TYPES.put(t.name,t);
@@ -927,7 +962,257 @@ public class S2CB extends JFrame {
 		t = new BlockType("conduit",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		t = new BlockType("bubble_column",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		
+		t = new BlockType("cut_sandstone"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cut_red_sandstone"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cut_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cut_red_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
 		
+		//1.14
+		t = new BlockType("fletching_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cartography_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smithing_table"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("composter"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("loom"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("blast_furnace"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("smoker"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("barrel"); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties
+		t = new BlockType("stonecutter",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. 
+		t = new BlockType("grindstone",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. can be placed hanging, so setting side attached so it chould be placed in pass 2 after it's support has been placed.
+		t = new BlockType("bell",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);	//directional, but should be covered in properties. can be placed hanging, so setting side attached so it chould be placed in pass 2 after it's support has been placed.
+		t = new BlockType("lantern",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("scaffolding",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("campfire",false,false,true,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("bamboo",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("bamboo_sapling",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("sweet_berry_bush",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cornflower",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("lily_of_the_valley",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("wither_rose",false,false,true,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("stone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_stone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_cobblestone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_cobblestone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_sandstone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_red_sandstone_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_red_sandstone_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("smooth_quartz"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_quartz_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("smooth_quartz_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("prismarine_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("dark_prismarine_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("dark_prismarine_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("andesite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("andesite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("andesite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_andesite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_andesite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("granite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("granite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("granite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_granite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_granite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("mossy_stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("mossy_stone_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+			
+		t = new BlockType("end_stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("end_stone_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("end_stone_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("red_nether_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("red_nether_brick_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("red_nether_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("prismarine_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("prismarine_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("stone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("nether_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("sandstone_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("red_sandstone_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("diorite_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_stairs",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("diorite_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		//1.15
+		t = new BlockType("bee_nest",false,true,false,false,false,false,false); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("beehive",false,true,false,false,false,false,false); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("honey_block",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("honeycomb_block"); 		BLOCK_TYPES.put(t.name,t);
+		
+		//1.16
+		t = new BlockType("ancient_debris"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("basalt"); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_basalt"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("cracked_nether_bricks"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("chiseled_nether_bricks"); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("blackstone"); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("chiseled_polished_blackstone"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_bricks"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("cracked_polished_blackstone_bricks"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("blackstone_slab",false,false,false,false,false,false,true); 					BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_slab",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_brick_slab",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("blackstone_stairs",false,false,false,false,false,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_stairs",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_brick_stairs",false,false,false,false,false,false,true); BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("blackstone_wall",false,false,false,false,false,false,true); 					BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_wall",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_brick_wall",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("polished_blackstone_button",false,false,true,false,false,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("polished_blackstone_pressure_plate",false,false,false,false,true,false,true); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("netherite_block"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("chain",false,false,false,false,false,false,true); 				BLOCK_TYPES.put(t.name,t);
+				
+		t = new BlockType("crimson_fungus",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_fungus",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+				
+		t = new BlockType("crimson_nylium"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_nylium"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_planks"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_planks"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_stem"); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stripped_crimson_stem"); BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_hyphae"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stripped_crimson_hyphae"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_stem"); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stripped_warped_stem"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_hyphae"); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("stripped_warped_hyphae"); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_sign",false,true,false,false,true,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_wall_sign",false,true,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_sign",false,true,false,false,true,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_wall_sign",false,true,false,false,false,false,true); 			BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_fence",false,false,false,false,false,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_fence_gate",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_fence",false,false,false,false,false,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_fence_gate",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_door",false,false,false,true,true,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_trapdoor",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_door",false,false,false,true,true,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_trapdoor",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_slab",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_stairs",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_slab",false,false,false,false,false,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_stairs",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_button",false,false,true,false,false,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("crimson_pressure_plate",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_button",false,false,true,false,false,false,true); 				BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_pressure_plate",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crimson_roots",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_roots",false,false,false,false,true,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("nether_sprouts",false,false,false,false,true,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("crying_obsidian"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("gilded_blackstone"); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("lodestone"); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("nether_gold_ore"); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("quartz_bricks"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("respawn_anchor"); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("shroomlight"); 			BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("soul_campfire",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("soul_fire",false,false,false,false,true,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("soul_lantern",false,false,true,false,false,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("soul_torch",false,false,false,false,true,false,true); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("soul_wall_torch",false,false,true,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("soul_soil"); 			BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("twisting_vines",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("twisting_vines_plant",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("weeping_vines",false,false,false,false,false,false,true); 		BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("weeping_vines_plant",false,false,false,false,false,false,true); 	BLOCK_TYPES.put(t.name,t);
+		t = new BlockType("warped_wart_block"); 	BLOCK_TYPES.put(t.name,t);
+		
+		t = new BlockType("target"); 		BLOCK_TYPES.put(t.name,t);
+				
 	}
 	
 	private static final ArrayList<BlockType> AIR_BLOCKS = new ArrayList<BlockType>();
@@ -935,11 +1220,14 @@ public class S2CB extends JFrame {
 		AIR_BLOCKS.add(BLOCK_TYPES.get("air"));
 		AIR_BLOCKS.add(BLOCK_TYPES.get("cave_air"));
 		AIR_BLOCKS.add(BLOCK_TYPES.get("void_air"));
+		AIR_BLOCKS.add(BLOCK_TYPES.get("piston_head"));
 	}
 	private static final ArrayList<BlockType> WATER_BLOCKS = new ArrayList<BlockType>();
 	static {
 		WATER_BLOCKS.add(BLOCK_TYPES.get("water"));
 		WATER_BLOCKS.add(BLOCK_TYPES.get("flowing_water"));
+		WATER_BLOCKS.add(BLOCK_TYPES.get("lava"));
+		WATER_BLOCKS.add(BLOCK_TYPES.get("flowing_lava"));
 	}
 	private static final ArrayList<BlockType> DOOR_BLOCKS = new ArrayList<BlockType>();
 	static {
@@ -950,6 +1238,8 @@ public class S2CB extends JFrame {
 		DOOR_BLOCKS.add(BLOCK_TYPES.get("acacia_door"));
 		DOOR_BLOCKS.add(BLOCK_TYPES.get("dark_oak_door"));
 		DOOR_BLOCKS.add(BLOCK_TYPES.get("iron_door"));
+		DOOR_BLOCKS.add(BLOCK_TYPES.get("crimson_door"));
+		DOOR_BLOCKS.add(BLOCK_TYPES.get("warped_door"));
 	}
 	private static final ArrayList<BlockType> DOUBLEPLANT_BLOCKS = new ArrayList<BlockType>();
 	static {
@@ -1030,10 +1320,11 @@ public class S2CB extends JFrame {
 	// map of old entity ids to names
 	static final HashMap<Integer,String> mobNames = new HashMap<Integer,String>();
 	static {
+		//orig
+		mobNames.put(44,"zombie_villager");
 		mobNames.put(50,"creeper");
 		mobNames.put(51,"skeleton");
 		mobNames.put(52,"spider");
-		mobNames.put(53,"giant");
 		mobNames.put(54,"zombie");
 		mobNames.put(55,"slime");
 		mobNames.put(56,"ghast");
@@ -1050,9 +1341,29 @@ public class S2CB extends JFrame {
 		mobNames.put(67,"endermite");
 		mobNames.put(68,"guardian");
 		mobNames.put(69,"shulker");
-		//1.13 - no official numbers anymore, but for logic reasons, hostile mobs are numbered below 90
-		mobNames.put(70,"phantom");
+		mobNames.put(70,"skeleton_horse");
+		mobNames.put(71, "elder_guardian");
+		mobNames.put(72, "husk");
+		mobNames.put(73, "stray");
 		
+		
+		//1.11
+		mobNames.put(74, "evoker");
+		mobNames.put(75, "vindicator");
+		mobNames.put(76, "vex");
+		//1.13 - no official numbers anymore, but for logic reasons, hostile mobs are numbered below 90
+		mobNames.put(77, "drowned");
+		mobNames.put(78,"phantom");
+		//1.14
+		mobNames.put(79,"pillager");
+		mobNames.put(80,"ravager");
+		//1.16
+		mobNames.put(80,"hoglin");
+		mobNames.put(81,"piglin");
+		mobNames.put(82,"zoglin");
+		mobNames.put(83,"zombified_piglin");
+		
+		//orig
 		mobNames.put(90,"pig");
 		mobNames.put(91,"sheep");
 		mobNames.put(92,"cow");
@@ -1065,10 +1376,19 @@ public class S2CB extends JFrame {
 		mobNames.put(99,"villager_golem");
 		mobNames.put(100,"horse");
 		mobNames.put(101,"rabbit");
+		mobNames.put(102, "snow_golem");
 		
 		mobNames.put(120,"villager");
 		
-		//1.13 - no official numbers anymore, but for logic reasons, hostile mobs are numbered below 90
+		mobNames.put(130, "polar_bear");
+		
+		//1.11
+		mobNames.put(148,"mule");
+		mobNames.put(149,"donkey");
+		mobNames.put(117, "llama");
+		//1.12- no official numbers anymore, but for logic reasons, hostile mobs are numbered below 90
+		mobNames.put(147, "parrot");
+		//1.13 
 		mobNames.put(150,"dolphin");
 		//fish seem to have actual number in bedrock ver. but not going to use them
 		mobNames.put(151,"cod");		//112
@@ -1077,7 +1397,25 @@ public class S2CB extends JFrame {
 		mobNames.put(154,"pufferfish");	//108
 		
 		mobNames.put(155,"turtle");
+		//1.14
+		mobNames.put(156, "cat"); //split from ocelots
+		mobNames.put(131, "fox");
+		mobNames.put(146, "panda");
+		mobNames.put(118, "wandering_trader");
+		mobNames.put(119, "trader_llama");
+		//1.15
+		mobNames.put(157,"bee");	//122
+		//1.16
+		mobNames.put(158,"strider");
+		
+		
+		
+		//unused
+		mobNames.put(53,"giant");
+		mobNames.put(-1,"zombie_horse");
+		mobNames.put(-2,"illusioner");
 	}
+	
 	
 	
 	/*
@@ -1202,14 +1540,14 @@ public class S2CB extends JFrame {
 	
 	
 	//aligned to block grid - all others have float coords
-	private static final String[] strEntityBlocks = {"item_frame","painting","ender_crystal","leash_knot",};//item frame, paintings, armor stand, ender crystal, lead knot   -   Armor stand is supposed to apply here, but apparently needs adjusted coords.
-	private static final HashSet<String> entityBlocks = new HashSet<String>(Arrays.asList(strEntityBlocks));
+	//private static final String[] strEntityBlocks = {"item_frame","painting","ender_crystal","leash_knot",};//item frame, paintings, armor stand, ender crystal, lead knot   -   Armor stand is supposed to apply here, but apparently needs adjusted coords.
+	//private static final HashSet<String> entityBlocks = new HashSet<String>(Arrays.asList(strEntityBlocks));
 	//may be excluded from conversion
 	private static HashSet<String> entityMob = new HashSet<String>();
 	//also may be excluded from conversion
 	private static HashSet<String> entityPassive = new HashSet<String>();
 	//never converted
-	private static final String[] strEntityProjectile = {"egg","arrow","snowball","fireball","small_fireball","ender_pearl","eye_of_ender_signal","potion","xp_bottle","wither_skull","fireworks_rocket"};
+	private static final String[] strEntityProjectile = {"egg","arrow","snowball","fireball","small_fireball","ender_pearl","eye_of_ender_signal","potion","xp_bottle","wither_skull","fireworks_rocket","llama_spit","evoker_fangs"};
 	private static final HashSet<String> entityProjectile = new HashSet<String>(Arrays.asList(strEntityProjectile));
 	
 	
@@ -1217,9 +1555,15 @@ public class S2CB extends JFrame {
 	private static final String[] testdir = {"xyz","xzy","yxz","yzx","zxy","zyx"};
 	
 	
-	private static final String cmdStartFirst = "summon "+fallingBlock+" ~%OX% ~1 ~%OZ% {BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[%MINECARTS%]}]}]}";
+	//private static final String cmdStartFirst = "summon "+fallingBlock+" ~%OX% ~1 ~%OZ% {BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[%MINECARTS%]}]}]}";
+	//private static final String cmdStartFirst = "summon armor_stand ~%OX% ~3 ~%OZ% {Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[%MINECARTS%]}]}]}]}]}]}]}";
+	private static final String cmdStartFirst = "summon "+fallingBlock+" ~%OX% ~1 ~%OZ% {BlockState:{Name:oak_leaves},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:redstone_block},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:"+fallingBlock+",BlockState:{Name:activator_rail},Time:1,Passengers:[{id:armor_stand,Health:0,Passengers:[%MINECARTS%]}]}]}]}]}]}";
+	
+	//[{id:"armor_stand",Health:0,Passengers:
+	
 	
 	private static final String cmdStartOther = "summon "+fallingBlock+" ~%OX% ~%OY% ~%OZ% {BlockState:{Name:sand},Time:1,Passengers:[%MINECARTS%]}";
+	//private static final String cmdStartOther = "summon armor_stand ~%OX% ~%OY% ~%OZ% {Health:0,Passengers:[{id:armor_stand,Health:0,Passengers:[{id:armor_stand,Health:0,Passengers:[%MINECARTS%]}]}]}";
 	
 	//private static final String psngrQuiet = "{id:command_block_minecart,Command:\"gamerule commandBlockOutput false\"}";
 	private static final String cmdQuiet = "gamerule commandBlockOutput false";
@@ -1263,8 +1607,10 @@ public class S2CB extends JFrame {
 	private static class SearchResults{
 		int bestPoints;
 		int x,y,z;
-		int okBlocks,badBlocks;
+		//int okBlocks,badBlocks;
 	}
+	
+	Map<String, Properties> settings;
 	
 
 	public static void main(String[] args) {
@@ -1284,42 +1630,467 @@ public class S2CB extends JFrame {
 		
 		S2CB s2cb = new S2CB();
 		
+		/*
 		if(args.length > 1) {
 			if(args[0].equals("terracotta")){
 				int id = Integer.parseInt(args[1]);
 				
-				//s2cb.doTerracotta(id, false);
+				s2cb.doTerracotta(id, false);
 			}
 			if(args[0].equals("cterracotta")){
 				int id = Integer.parseInt(args[1]);
 				
-				//s2cb.doTerracotta(id, true);
+				s2cb.doTerracotta(id, true);
 			}
 		}
+		*/
 	}
 
 
 	public S2CB() {
-		//initItems();
-		initEntities();
 		
+		settings = null;
+		loadSettings();
+		if(settings!=null) {
+			useSettings();
+		}else {
+			settings = new HashMap<String, Properties>();
 		
-		//init mobs - this is really only needed for determining passive and hostile mobs
-		for(Map.Entry<Integer, String>e : mobNames.entrySet()) {
-			String name = e.getValue();
-			if(e.getKey() < 90) {
-				entityMob.add(name);
-			}else {
-				entityPassive.add(name);
+			//initItems();			
+			
+			//init mobs - this is really only needed for determining passive and hostile mobs
+			for(Map.Entry<Integer, String>e : mobNames.entrySet()) {
+				String name = e.getValue();
+				if(e.getKey() < 90) {
+					entityMob.add(name);
+				}else {
+					entityPassive.add(name);
+				}
 			}
+			
+			
+			writeSettings();
 		}
 		
+		initEntities();
 		
 		init();
 		pack();
 		setLocationByPlatform(true);
 		setVisible(true);
 		
+	}
+	
+	private void loadSettings() {
+		//find settings file, either in the local filesystem or from the jar file
+		//find path to jar file and check that path for settings file
+		/*
+		ClassLoader classLoader = getClass().getClassLoader();
+		URL url = classLoader.getResource(SETTINGS_FILENAME);
+		if(url!=null) {
+			String fileStr = url.getFile();
+			int pos = fileStr.indexOf('!'); // ! appears after the jar file name to indicate that the following parts of the path are inside a compressed archive 
+			if(pos>0) {
+				pos = fileStr.lastIndexOf('/', pos); //get the path up to the jar file.
+				if(pos>0) {
+					fileStr = fileStr.substring(0, pos) + SETTINGS_FILENAME;
+		*/
+					Path currentRelativePath = Paths.get("");
+					String fileStr = currentRelativePath.toAbsolutePath().toString();
+					fileStr = fileStr + File.separator + SETTINGS_FILENAME;			
+		
+					File settingsFile = new File(fileStr);
+					if(settingsFile.exists()) {
+						//found settings file outside of jar - use it
+						try {
+							settings = parseINI(new FileReader(settingsFile));
+							
+							return;
+						}catch(IOException e) {
+							e.printStackTrace();
+						}
+					}
+/*				
+ 				}
+			}
+		}
+		*/
+		
+		//check in jar file (should find it there)
+		try {
+			ClassLoader cl = getClass().getClassLoader();
+			InputStream is = cl.getResourceAsStream(SETTINGS_FILENAME);
+			if(is!=null) {
+				InputStreamReader sr = new InputStreamReader(is);
+				settings = parseINI(sr);
+			}
+		}catch(IOException e) {
+			e.printStackTrace();
+		}
+		
+		
+	}
+	
+	private void writeSettings() {
+		
+		//first, clear and reset for data structures all the properties objects
+		//this is so if we failed to load, we will write the defaults, and eliminate anything we did load but failed to parse
+		{
+			Properties blocks = settings.get("BLOCKS");
+			if(blocks == null) {
+				blocks = new Properties();
+				settings.put("BLOCKS", blocks);
+			}
+			blocks.clear();
+			for(BlockType t : BLOCK_TYPES.values()) {
+				
+				String value = "";
+				if(t.issues != 0) {
+					value = ""+t.isAir()+", "+t.hasInventory()+", "+t.isSideAttached()+", "+t.isMultiblock()+", "+t.needsSupport()+", "+t.isRail()+", "+t.isTransparent()+", "+t.isPassTwo();
+				}
+				blocks.setProperty(t.name, value);
+			}
+			
+			Properties dblocks = settings.get("DANGERBLOCKS");
+			if(dblocks == null) {
+				dblocks = new Properties();
+				settings.put("DANGERBLOCKS", dblocks);
+			}
+			dblocks.clear();
+			for(String str : dangerousBlocks) {
+				
+				String value = "";
+				dblocks.setProperty(str, value);
+			}
+			
+			Properties lblocks = settings.get("LIQUIDBLOCKS");
+			if(lblocks == null) {
+				lblocks = new Properties();
+				settings.put("LIQUIDBLOCKS", lblocks);
+			}
+			lblocks.clear();
+			for(BlockType b : WATER_BLOCKS) {
+				String value = "";
+				lblocks.setProperty(b.name, value);
+			}
+			
+			Properties doorblocks = settings.get("DOORBLOCKS");
+			if(doorblocks == null) {
+				doorblocks = new Properties();
+				settings.put("DOORBLOCKS", doorblocks);
+			}
+			doorblocks.clear();
+			for(BlockType b : DOOR_BLOCKS) {
+				String value = "";
+				doorblocks.setProperty(b.name, value);
+			}
+			
+			Properties dpblocks = settings.get("DOUBLEPLANTBLOCKS");
+			if(dpblocks == null) {
+				dpblocks = new Properties();
+				settings.put("DOUBLEPLANTBLOCKS", dpblocks);
+			}
+			dpblocks.clear();
+			for(BlockType b : DOUBLEPLANT_BLOCKS) {
+				String value = "";
+				dpblocks.setProperty(b.name, value);
+			}
+			
+			Properties pMobs = settings.get("PASSIVEMOBS");
+			if(pMobs == null) {
+				pMobs = new Properties();
+				settings.put("PASSIVEMOBS", pMobs);
+			}
+			pMobs.clear();
+			for(String name : entityPassive) {
+				String value = "";
+				for(Integer key : mobNames.keySet()) {
+					if(mobNames.get(key).equals(name)) {
+						value = ""+key;
+						break;
+					}
+				}
+				pMobs.setProperty(name, value);
+			}
+			
+			
+			Properties hMobs = settings.get("HOSTILEMOBS");
+			if(hMobs == null) {
+				hMobs = new Properties();
+				settings.put("HOSTILEMOBS", hMobs);
+			}
+			hMobs.clear();
+			for(String name : entityMob) {
+				String value = "";
+				for(Integer key : mobNames.keySet()) {
+					if(mobNames.get(key).equals(name)) {
+						value = ""+key;
+						break;
+					}
+				}
+				hMobs.setProperty(name, value);
+			}
+			
+			Properties projectiles = settings.get("PROJECTILES");
+			if(projectiles == null) {
+				projectiles = new Properties();
+				settings.put("PROJECTILES", projectiles);
+			}
+			projectiles.clear();
+			for(String name : entityProjectile) {
+				String value = "";
+				projectiles.setProperty(name, value);
+			}
+			
+		}
+		
+		
+		
+		//find settings file, either in the local filesystem or from the jar file
+		//find path to jar file and check that path for settings file
+		
+		Path currentRelativePath = Paths.get("");
+		String fileStr = currentRelativePath.toAbsolutePath().toString();
+		fileStr = fileStr + File.separator + SETTINGS_FILENAME;
+		
+		File settingsFile = new File(fileStr);
+		if(!settingsFile.exists()) {
+		
+			//create new file since one doesn't exist
+			try {
+				BufferedWriter bw = new BufferedWriter(new FileWriter(settingsFile));
+				
+				//write header
+				String comment = "# s2cb "+programVersion+" configuration file\n";
+				comment += "# For Minecraft "+minecraftVersion+"\n";
+				comment += "# May work for later versions, or earlier versions back to 1.12 as long as no newer blocks are used\n";
+				comment += "# \n";
+				comment += "# BLOCKS section contains the name of a block, and either blank value (no special handling), or a set of true / false values indicating the special handling needed for the block.\n";
+				comment += "# Values are as follows:\n";
+				comment += "# 1. Is an air block?\n";
+				comment += "# 2. Does block hold inventory (or block entity data)?\n";
+				comment += "# 3. Does the block attach to the block next to it (wall torches or wall signs are examples)?\n";
+				comment += "# 4. Is the block part of a multi-block block/item (beds (2 blocks long), doors or tall plants (2 blocks high)) ?\n";
+				comment += "# 5. Does the block need support (break if there is not a block below them (sand, repeaters, etc.)?\n";
+				comment += "# 6. Is this a type of rail track?\n";
+				comment += "# 7. Is this block transparent or see through in part (not a full block)? For this, glass, slime, honey, enchanting table would all be true, but soulsand, even though you sink into it is not considered transparent. (This is used for hollowing out structures of block that will never be seen by players)\n";
+				comment += "# 8. Does block block require some other type of block surrounding it to exist? (Only blocks like nether portal blocks, end portal blocks, and sugar cane)\n";
+				comment += "# Block entires should either be blank, or contain all eight true/false values. True, False, Yes, No, T, F, Y, N, 1, 0 are accepted\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# DANGERBLOCKS section is a list of dangerous blocks that won't be placed if the 'No Dangerous Blocks' options is set\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# LIQUIDBLOCKS section lists all liquid block types\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# DOORBLOCKS section lists all door block types\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# DOUBLEPLANTBLOCKS section lists all double tall plant types\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# PASSIVEMOBS section lists the names of the passive mobs. The value they should be set to is the 'mob id number' from old minecraft versions. For newer mobs, any unique number will do, although passive mobs ids are generally above 90 (the number is only used if trying to load an old schematic that still uses mob id numbers instead of names).\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# HOSTILEMOBS section lists the names of hostile mobs. The are not placed if 'No Monsters' is enabled.  The value they should be set to is the 'mob id number' from old minecraft versions. For newer mobs, any unique number will do, althoug for hostile mobs, the ids are generally below 90 (the number is only used if trying to load an old schematic that still uses mob id numbers instead of names).\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# PROJECTILES section lists the names of projectile entities\n";
+				comment += "# \n";
+				comment += "# \n";
+				comment += "# "+Instant.now().toString()+"\n\n\n";
+				bw.append(comment);
+				
+				//write each section
+				for(String section : settings.keySet()) {
+					Properties prop = settings.get(section);
+					if(prop!=null) {
+						bw.append("["+section+"]\n");
+						prop.store(bw,null);
+						bw.append("\n\n");
+					}
+				}
+				bw.close();
+				
+			} catch (IOException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+
+		}
+	}
+	
+	public static Map<String, Properties> parseINI(Reader reader) throws IOException {
+	    Map<String, Properties> result = new HashMap<String, Properties>();
+	    new Properties() {
+
+	        private Properties section;
+
+	        @Override
+	        public Object put(Object key, Object value) {
+	            String header = (((String) key) + " " + value).trim();
+	            if (header.startsWith("[") && header.endsWith("]"))
+	                return result.put(header.substring(1, header.length() - 1), 
+	                        section = new Properties());
+	            else
+	                return section.put(key, value);
+	        }
+
+	    }.load(reader);
+	    return result;
+	}
+	
+	private void useSettings() {
+		
+		//blocks
+		Properties blocks = settings.get("BLOCKS");
+		if(blocks!=null && blocks.size() > 0) {
+			BLOCK_TYPES.clear();
+			
+			Set<String> keys = blocks.stringPropertyNames();
+			for(String key : keys) {
+				String val = blocks.getProperty(key);
+				BlockType t = null;
+				if(val == null || val.length() == 0) {
+					 t = new BlockType(key); 
+				}else {
+					boolean[] issues = new boolean[8];
+					String[] issueStr = val.split(",");
+					for(int i=0; i < issues.length && i< issueStr.length;i++) {
+						issueStr[i] = issueStr[i].trim().toUpperCase();
+						switch(issueStr[i]){
+							case "T":
+							case "Y":
+							case "1":
+							case "TRUE":
+							case "YES":
+								issues[i] = true;
+								break;
+							default:
+								issues[i] = false;
+								break;
+						}
+					}
+					t = new BlockType(key,issues[0],issues[1],issues[2],issues[3],issues[4],issues[5],issues[6]);
+					if(issues[7]) {
+						t.setPassTwo();
+					}
+				}
+				
+				BLOCK_TYPES.put(t.name,t);
+			}
+			
+			
+			//air blocks
+			AIR_BLOCKS.clear();
+			for(BlockType t : BLOCK_TYPES.values()) {
+				if(t.isAir()) {
+					AIR_BLOCKS.add(t);
+				}
+			}
+		}
+		
+		//dangerblock
+		Properties dblocks = settings.get("DANGERBLOCKS");
+		if(dblocks!=null && dblocks.size() > 0) {
+			dangerousBlocks.clear();
+			
+			Set<String> keys = dblocks.stringPropertyNames();
+			for(String key : keys) {
+				dangerousBlocks.add(key);
+			}
+		}
+		
+		//liquidblocks
+		Properties lblocks = settings.get("LIQUIDBLOCKS");
+		if(lblocks!=null && lblocks.size() > 0) {
+			WATER_BLOCKS.clear();
+			
+			Set<String> keys = lblocks.stringPropertyNames();
+			for(String key : keys) {
+				WATER_BLOCKS.add(BLOCK_TYPES.get(key));
+			}
+		}
+		
+		//doorblocks
+		Properties doorblocks = settings.get("DOORBLOCKS");
+		if(doorblocks!=null && doorblocks.size() > 0) {
+			DOOR_BLOCKS.clear();
+			
+			Set<String> keys = doorblocks.stringPropertyNames();
+			for(String key : keys) {
+				DOOR_BLOCKS.add(BLOCK_TYPES.get(key));
+			}
+		}
+		
+		//doubleplantblocks
+		Properties dpblocks = settings.get("DOUBLEPLANTBLOCKS");
+		if(dpblocks!=null && dpblocks.size() > 0) {
+			DOUBLEPLANT_BLOCKS.clear();
+			
+			Set<String> keys = dpblocks.stringPropertyNames();
+			for(String key : keys) {
+				DOUBLEPLANT_BLOCKS.add(BLOCK_TYPES.get(key));
+			}
+		}
+		
+		//mobs
+		Properties pMobs = settings.get("PASSIVEMOBS");
+		Properties hMobs = settings.get("HOSTILEMOBS");
+		
+		if(pMobs!=null && hMobs!=null) {
+			mobNames.clear();
+			
+			//hostilemobs
+			if(hMobs!=null && hMobs.size() > 0) {
+				entityMob.clear();
+				
+				Set<String> keys = hMobs.stringPropertyNames();
+				for(String key : keys) {
+					entityMob.add(key);
+					
+					String val = hMobs.getProperty(key);
+					int value = entityMob.size();
+					try {
+						value = Integer.parseInt(val);
+					}catch(NumberFormatException nfe) {}
+					
+					mobNames.put(value,key);
+				}
+			}
+		
+			//passivemobs
+			if(pMobs!=null && pMobs.size() > 0) {
+				entityPassive.clear();
+				
+				Set<String> keys = pMobs.stringPropertyNames();
+				for(String key : keys) {
+					entityPassive.add(key);
+					
+					String val = pMobs.getProperty(key);
+					int value = entityPassive.size() + 256; //to hopefully stop conflicts
+					try {
+						value = Integer.parseInt(val);
+					}catch(NumberFormatException nfe) {}
+					
+					mobNames.put(value,key);
+				}
+			}
+			
+			
+		}
+		
+		//projectiles
+		Properties projectiles = settings.get("PROJECTILES");
+		if(projectiles!=null && projectiles.size() > 0) {
+			entityProjectile.clear();
+			
+			Set<String> keys = projectiles.stringPropertyNames();
+			for(String key : keys) {
+				entityProjectile.add(key);
+			}
+		}
 	}
 
 	private void init() {
@@ -1351,6 +2122,7 @@ public class S2CB extends JFrame {
 		removeProjectiles.setSelected(true);
 		removeBarriers.setSelected(false);
 		ignoreWirePower.setSelected(true);
+		redstoneDotsToPluses.setSelected(true);
 		imperfectFills.setSelected(false);
 		checkClones.setSelected(false);
 		complexRails.setSelected(false);
@@ -1457,14 +2229,15 @@ public class S2CB extends JFrame {
 		cbPanel.add(removeProjectiles);
 		cbPanel.add(limitDistance);
 		cbPanel.add(serverSafe);
+		cbPanel.add(removeBarriers);
 		gbl.setConstraints(cbPanel, gbcl);
 		controls.add(cbPanel);
 		
 		gbcl.gridy = gbcc.gridy = 3;
 		cbPanel = new JPanel();
 		cbPanel.add(ignoreWirePower);
+		cbPanel.add(redstoneDotsToPluses);
 		cbPanel.add(complexRails);
-		cbPanel.add(removeBarriers);
 		cbPanel.add(minimizeWater);
 		cbPanel.add(minimizeEntities);
 		cbPanel.add(hollowOut);
@@ -1486,6 +2259,7 @@ public class S2CB extends JFrame {
 		minimizeEntities.setToolTipText("<html><body>Removes most unneeded (default) properties from entities for smaller commands.</body></html>");
 		complexRails.setToolTipText("<html><body>If checked, will more carefully place rails, one at a time, following the rail line directions,<br>compared to just placing them along with other blocks, west to east, north to south, bottom to top.<br>Checked generates larger commands and is only needed if you have rail lines right next to each other or complex rail intersections.<br>Checked may still have a few rails placed incorrectly in some circumstances where the rails needed to be placed in a specific order or you needed to pace a rail before another and then delete the first rail to get the wanted configuration.</body></html>");
 		ignoreWirePower.setToolTipText("<html><body>Unchecked, restores redstone wire with the exact power from schematic. Checked, redstone wire is placed unpowered, relying on the game to recalculate power level (creates smaller commands).</body></html>");
+		redstoneDotsToPluses.setToolTipText("<html><body>In Minecraft 1.16 single spots of redstone dust default to a dot that doesn't power the blocks to it's side, but can be changed to a plus which will.<br>In earilier version on Minecraft, single spots would power the blocks to it sides.<br>Selecting this setting will convert any single spots of redstone to a plus.<br>If unselected, single spots of redstone won't be modified.<br>Unselect if using an .nbt or .litematic from 1.16 as they will have to single spots saved with the correct properties</body></html>");
 		serverSafe.setToolTipText("<html><body>Limits the length of commands to about 80% of the maximum length normally allowed as some server kick players using max length commands.</body></html>");
 		hollowOut.setToolTipText("<html><body>If enabled, removes completely hidden blocks, which should reduce the number of commands needed for schematics with large solid areas, but can also increase it for certain schematics.</body></html>");
 		limitDistance.setToolTipText("<html><body>If enabled, this option makes sure that the line of command block needed to recreate the schematic does not exceed the width of the schematic (depending on build direction) by creating additional lines of command blocks.</body></html>");
@@ -1585,13 +2359,11 @@ public class S2CB extends JFrame {
 			public boolean accept(File f) {
 				if(f.isDirectory())
 					return true;
-				return f.getName().endsWith(".schematic") || f.getName().endsWith(".nbt");
-				//return f.getName().endsWith(".nbt");
+				return f.getName().endsWith(".schematic") || f.getName().endsWith(".nbt") || f.getName().endsWith(".litematic") || f.getName().endsWith(".schem");
 			}
 			@Override
 			public String getDescription() {
-				return "Minecraft Schematic or Saved Structure";
-				//return "NBT Saved Structure";
+				return "MCEdit Schematic, Minecraft Structure, Litematic or WorldEdit Schematic";
 			}
 		};
 		chooser.setFileFilter(filter);
@@ -1600,11 +2372,19 @@ public class S2CB extends JFrame {
 		
 		//display info html page
 		try {
-			String src = readFile(new File("info.html"));
+			String src = "";
+			InputStream in = getClass().getResourceAsStream("/info.html");
+			if(in!=null) {
+				src = readFile(new InputStreamReader(in));
+			}else {
+				src = readFile(new File("info.html"));
+			}
+
 			URL u = this.getClass().getClassLoader().getResource("guide.png");
 			if(u==null) {
 				u = (new File("guide.png")).toURI().toURL();
 			}
+			//JOptionPane.showMessageDialog(this, "URL: "+u.toExternalForm()+" - "+u.toString());
 			src = src.replace("guide.png", u.toString());
 			src = src.replace("%VER%", minecraftVersion);
 			src = src.replace("%PRGVER%", programVersion);
@@ -1683,7 +2463,14 @@ public class S2CB extends JFrame {
 			r = new InputStreamReader(is, "UTF-8");
 		}
 		
-	    BufferedReader reader = new BufferedReader( r );
+		String data = readFile(r);
+	    
+	    r.close();
+	    return data;
+	}
+	
+	private String readFile( Reader r) throws IOException {
+		BufferedReader reader = new BufferedReader( r );
 	    String         line = null;
 	    StringBuilder  stringBuilder = new StringBuilder();
 	    String         ls = System.getProperty("line.separator");
@@ -1694,31 +2481,20 @@ public class S2CB extends JFrame {
 	    }
 
 	    reader.close();
-	    
 	    return stringBuilder.toString();
-	}
+	} 
 	
 	private void chooseFile() {
 		
-		ITag sch = null;
+		NamedTag sch = null;
 		
 		
 		int result = chooser.showOpenDialog(this);
 		if(result == JFileChooser.APPROVE_OPTION) {
-			NbtInputStream nis = null;
+			
 			try {
-				try {
-					nis = new NbtInputStream(new GZIPInputStream(new FileInputStream(chooser.getSelectedFile())));
-				}catch(ZipException ze) {
-					try {
-						//maybe not gzipped?  really rare (as in not a proper nbt file)
-						nis = new NbtInputStream(new FileInputStream(chooser.getSelectedFile()));
-					}catch(Exception e) {
-						throw ze;
-					}
-				}
 				
-				sch = nis.readTag();
+				sch = NBTUtil.read(chooser.getSelectedFile());
 				
 			}catch(IOException e) {
 				out.setText("An IOException Occured: "+e.getLocalizedMessage());
@@ -1726,22 +2502,19 @@ public class S2CB extends JFrame {
 			}catch(Exception e) {
 				out.setText("An Exception Occured: "+e.getLocalizedMessage());
 				e.printStackTrace();
-			}finally {
-				if(nis!=null) {
-					try {
-						nis.close();
-					} catch (IOException e) {
-						e.printStackTrace();
-					}
-				}
 			}
 		}
 		
 		if(sch!=null) {
 			
+			Tag t = sch.getTag();
+			
 			try {
-				if(sch instanceof TagCompound && (sch.getName().equals("Schematic") || 
-						(sch.getName().equals("") && ((TagCompound)sch).getTags().containsKey("DataVersion") && ((TagCompound)sch).getInteger("DataVersion") >= 1519 )) ) {
+				if(t instanceof CompoundTag && (sch.getName().equals("Schematic") || 
+						(sch.getName().equals("") && ((CompoundTag)t).containsKey("DataVersion") && ((CompoundTag)t).getInt("DataVersion") >= MINECRAFT_VER_1_13 )) || 
+						(sch.getName().equals("") && ((CompoundTag)t).containsKey("Metadata") && ((CompoundTag)t).containsKey("MinecraftDataVersion") && ((CompoundTag)t).getInt("MinecraftDataVersion") >= MINECRAFT_VER_1_13) ||
+						(sch.getName().equals("") && ((CompoundTag)t).containsKey("Metadata") && ((CompoundTag)t).containsKey("BlockData") && ((CompoundTag)t).containsKey("tDataVersion") && ((CompoundTag)t).getInt("DataVersion") >= MINECRAFT_VER_1_13)
+						) {
 					out.setText("Running...");
 					out.setEditorKit(new StyledEditorKit());
 					
@@ -1751,7 +2524,7 @@ public class S2CB extends JFrame {
 					setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 					out.setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 					
-					final TagCompound schem = (TagCompound)sch; 
+					final CompoundTag schem = (CompoundTag)t; 
 					(new Thread(new Runnable(){
 
 						@Override
@@ -1766,73 +2539,81 @@ public class S2CB extends JFrame {
 					printData(sch);
 				
 				}
-			} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+			} catch (Exception e) {
+				//TODO: figure out which if any exceptions can occur above, and have the specific exceptions here. 
 				e.printStackTrace();
 				printData(sch);
 			}
 		}
 	}
 	
-	private void printData(ITag tag) {
+	private void printData(NamedTag ntag) {
 		
-		if(tag instanceof TagCompound) {
+		Tag tag = ntag.getTag();
+		
+		if(tag instanceof CompoundTag) {
 			//expected
-			TagCompound ctag = (TagCompound)tag;
-			Map<String,ITag> vals = ctag.getTags();
+			CompoundTag ctag = (CompoundTag)tag;
+			Set<Entry<String,Tag<?>>> vals = ctag.entrySet();
 			StringBuilder sb = new StringBuilder();
 			
-			sb.append("Unknown file type found:\n");
+			sb.append("Unknown file type found:<br>\n");
 			
-			for(String s:vals.keySet()) {
-				ITag t = vals.get(s);
-				if(t instanceof TagString) {
+			for(Entry<String,Tag<?>> entry:vals) {
+				String s = entry.getKey();
+				Tag<?> t = entry.getValue();
+				if(t instanceof StringTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagString)t).getValue());
+					sb.append(((StringTag)t).getValue());
 					
-				}else if(t instanceof TagInteger) {
+				}else if(t instanceof IntTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagInteger)t).getValue());
+					sb.append(((IntTag)t).asInt());
 					
-				}else if(t instanceof TagDouble) {
+				}else if(t instanceof DoubleTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagDouble)t).getValue());
+					sb.append(((DoubleTag)t).asDouble());
 					
-				}else if(t instanceof TagFloat) {
+				}else if(t instanceof FloatTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagFloat)t).getValue());
+					sb.append(((FloatTag)t).asFloat());
 					
-				}else if(t instanceof TagShort) {
+				}else if(t instanceof ShortTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagShort)t).getValue());
+					sb.append(((ShortTag)t).asShort());
 					
-				}else if(t instanceof TagByte) {
+				}else if(t instanceof ByteTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(0+((TagByte)t).getValue());
+					sb.append(0+((ByteTag)t).asByte());
 					
-				}else if(t instanceof TagLong) {
+				}else if(t instanceof LongTag) {
 					sb.append(s);
 					sb.append(" = ");
-					sb.append(((TagLong)t).getValue());
+					sb.append(((LongTag)t).asLong());
 					
-				}else if(t instanceof TagByteArray) {
+				}else if(t instanceof ByteArrayTag) {
 					sb.append(s);
 					sb.append(" ByteArray ");
 					
-				}else if(t instanceof TagIntegerArray) {
+				}else if(t instanceof IntArrayTag) {
 					sb.append(s);
 					sb.append(" IntegerArray ");
 					
-				}else if(t instanceof TagList) {
+				}else if(t instanceof LongArrayTag) {
+					sb.append(s);
+					sb.append(" LongArray ");
+					
+				}else if(t instanceof ListTag) {
 					sb.append(s);
 					sb.append(" List ");
 					
-				}else if(t instanceof TagCompound) {
+				}else if(t instanceof CompoundTag) {
 					sb.append(s);
 					sb.append(" Compound ");
 					
@@ -1843,14 +2624,15 @@ public class S2CB extends JFrame {
 					sb.append(t.getClass().getName());
 				}
 				
-				sb.append("\n");
+				sb.append("<br>\n");
 			}
-			sb.append("\n\nExpected File with DataVersion >= 1519\n");
+			sb.append("<br>\n<br>\nExpected File with DataVersion >= 1519<br>\n");
 			
 			out.setText(sb.toString());
 			
 		}else {
-			out.setText("Found tag named '"+tag.getName()+"' but not a compound tag.  Aborting.");
+			String name = "";
+			out.setText("Found tag named '"+ntag.getName()+"' but not a compound tag.  Aborting.");
 		}
 		
 		/*
@@ -1872,7 +2654,7 @@ public class S2CB extends JFrame {
 	 * @param tag the root NBT tag of the schematic
 	 * @param filename the schematic file name 
 	 */
-	private void convert(TagCompound tag, String filename) {
+	private void convert(CompoundTag tag, String filename) {
 		
 		StringBuilder sb = new StringBuilder();
 		int w,l,h;
@@ -1884,6 +2666,16 @@ public class S2CB extends JFrame {
 			data.format = Format.STRUCTURE;
 			if(filename.length()>4) {
 				data.filename = filename.substring(0, filename.length() - 4);
+			}
+		}else if(filename.endsWith(".litematic") || filename.endsWith(".LITEMATIC")) {
+			data.format = Format.LITEMATIC;
+			if(filename.length()>10) {
+				data.filename = filename.substring(0, filename.length() - 10);
+			}
+		}else if(filename.endsWith(".schem") || filename.endsWith(".SCHEM")) {
+			data.format = Format.SPONGE;
+			if(filename.length()>6) {
+				data.filename = filename.substring(0, filename.length() - 6);
 			}
 		}else {
 			data.format = Format.SCHEMATIC;
@@ -1904,7 +2696,7 @@ public class S2CB extends JFrame {
 				l = tag.getShort("Length");
 				h = tag.getShort("Height");
 				
-				if(h>256 || w>4000 || h > 4000) {
+				if(h>256 || w>4000 || l > 4000) {
 					sb.append("Width: ");
 					sb.append(w);
 					sb.append("  Length: ");
@@ -1922,37 +2714,60 @@ public class S2CB extends JFrame {
 				
 				byte[] blocks = tag.getByteArray("Blocks");
 				byte[] bdata = tag.getByteArray("Data");
-				List<TagCompound> tileEntities = tag.getList("TileEntities", TagCompound.class);
-				data.entities = tag.getList("Entities", TagCompound.class);
+				ListTag<?> tileEntities = tag.getListTag("TileEntities");
+				data.entities = tag.getListTag("Entities");
+				
+				
+				data.w = w;
+				data.h = h;
+				data.l = l;
+				
+				if(tag.containsKey("WEOriginX")) {
+					//WorldEdit .schematic values?
+					data.weOriginX = tag.getInt("WEOriginX");
+					data.weOriginY = tag.getInt("WEOriginY");
+					data.weOriginZ = tag.getInt("WEOriginZ");
+				}
 				
 				
 				appendTextNow("\n\nConverting Schematic format...");
-				SchematicConverter sc = new SchematicConverter(oldBannerConversion.getSelectedIndex()); 
-				sc.convert(data,blocks,bdata,tileEntities,w,h,l,out);
+				SchematicConverter sc = new SchematicConverter(oldBannerConversion.getSelectedIndex(), redstoneDotsToPluses.isSelected(), ignoreWirePower.isSelected()); 
+				
+				if(tag.containsKey("Materials")) {
+					try {
+						String str = tag.getString("Materials");
+						if(str.equals("Alpha")) {
+							sc.setOldColors();
+						}
+					}catch(Exception e) {}
+				}
+				
+				sc.schematicToModern(data,blocks,bdata,tileEntities,w,h,l,out);
 				sc = null;
 				System.gc();
 				
 				System.out.println("conversion done");
 				
-			}else {
+			}else if(data.format == Format.STRUCTURE) {
 				
 				sb.append("Structure File: ");
 				sb.append(filename);
 				sb.append("\n\n");
-				try {
-					String author = tag.getString("author");
+				String author = tag.getString("author");
+				if(author != null && author.length()>0) {
 					sb.append("\nby ");
 					sb.append(author);
-				}catch(TagNotFoundException e) {
-					//ignore - MCEdit apparently adds an author tag, but Minecraft itself doesn't.
 				}
+								
+				ListTag<IntTag> size = tag.getListTag("size").asIntTagList() ;
+				w = size.get(0).asInt();
+				h = size.get(1).asInt();
+				l = size.get(2).asInt();
+				data.w = w;
+				data.h = h;
+				data.l = l;
 				
-				List<TagInteger> size = tag.getList("size", TagInteger.class);
-				w = size.get(0).getValue();
-				h = size.get(1).getValue();
-				l = size.get(2).getValue();
-				
-				if(h>256 || w>4000 || h > 4000) {
+				if(h>256 || w>4000 || l > 4000) {
 					sb.append("Width: ");
 					sb.append(w);
 					sb.append("  Length: ");
@@ -1968,28 +2783,145 @@ public class S2CB extends JFrame {
 				
 				appendTextNow("width: "+w+"  length: "+l+"  height: "+h);
 				
-				data.blockList = new ArrayList<TagCompound>();
-				data.blockList.addAll(tag.getList("blocks", TagCompound.class));//so that this list is modifiable
-				data.palette = new ArrayList<TagCompound>();
-				data.palette.addAll(tag.getList("palette", TagCompound.class));//so that this list is modifiable
-				data.entities = tag.getList("entities", TagCompound.class);
+								
+				data.blockList = new ListTag(CompoundTag.class);
+				ListTag<?> blks = tag.getListTag("blocks");
+				if(blks!=null) {
+					data.blockList.addAll( blks.values());//so that this list is modifiable
+				}
+				data.palette = new ListTag(CompoundTag.class);
+				data.palette.addAll(tag.getListTag("palette").values());//so that this list is modifiable
+				data.entities = tag.getListTag("entities");
 				
 				buildBlockCache();
+				
+				
+			}else if(data.format == Format.LITEMATIC) {
+				
+				sb.append("Litematic File: ");
+				sb.append(filename);
+				sb.append("\n\n");
+				
+				CompoundTag metadata = tag.getCompoundTag("Metadata");
+				data.dataVersion = tag.getInt("MinecraftDataVersion");
+				
+				
+				String author = metadata.getString("Author");
+				if(author!=null && author.length()>0) {
+					sb.append("\nby ");
+					sb.append(author);
+				}
+				
+				String desc = metadata.getString("Description");
+				if(desc.length() > 0) {
+					sb.append("\nDescription: ");
+					sb.append(desc);
+				}
+				
+				
+				CompoundTag size = metadata.getCompoundTag("EnclosingSize");
+				w = size.getInt("x");
+				h = size.getInt("y");
+				l = size.getInt("z");
+				data.w = w;
+				data.h = h;
+				data.l = l;
+				
+				if(h>256 || w>4000 || l > 4000) {
+					sb.append("Width: ");
+					sb.append(w);
+					sb.append("  Length: ");
+					sb.append(l);
+					sb.append("  Height: ");
+					sb.append(h);
+					sb.append("\n");
+					
+					sb.append("\nStructure is too large!");
+					showText(sb);
+					return;
+				}
+				
+				appendTextNow("width: "+w+"  length: "+l+"  height: "+h);
+				
+				data.entities = tag.getListTag("entities");
+				
+				CompoundTag regions = tag.getCompoundTag("Regions");
+				
+				buildBlockCacheLitematic(regions);
+				
+				
+				
+			}else if(data.format == Format.SPONGE) {
+				
+				sb.append("Sponge (WorldEdit) File: ");
+				sb.append(filename);
+				sb.append("\n\n");
+				
+				CompoundTag metadata = tag.getCompoundTag("Metadata");
+				data.dataVersion = tag.getInt("DataVersion");
+				
+				//this shouldn't be in sponge files, but... maybe in the future...
+				String author = metadata.getString("Author");
+				if(author!=null && author.length()>0) {
+					sb.append("\nby ");
+					sb.append(author);
+				}
+				
+				//no description either
+				String desc = metadata.getString("Description");
+				if(desc!=null && desc.length() > 0) {
+					sb.append("\nDescription: ");
+					sb.append(desc);
+				}
+				
+				
+				w = tag.getShort("Width");
+				h = tag.getShort("Height");
+				l = tag.getShort("Length");
+				data.w = w;
+				data.h = h;
+				data.l = l;
+				
+				if(h>256 || w>4000 || l > 4000) {
+					sb.append("Width: ");
+					sb.append(w);
+					sb.append("  Length: ");
+					sb.append(l);
+					sb.append("  Height: ");
+					sb.append(h);
+					sb.append("\n");
+					
+					sb.append("\nStructure is too large!");
+					showText(sb);
+					return;
+				}
+				
+				appendTextNow("width: "+w+"  length: "+l+"  height: "+h);
+				
+				if(metadata.containsKey("WEOffsetX")) { 
+					//is this the same as WEOrigin from .schematic values?  //do I even use these values?
+					data.weOriginX = tag.getInt("WEOffsetX");
+					data.weOriginY = tag.getInt("WEOffsetY");
+					data.weOriginZ = tag.getInt("WEOffsetZ");
+				}
+				
+				
+				data.entities = tag.getListTag("entities");
+
+				
+				buildBlockCacheSponge(tag);
+				
+				
+				
+			}else {
+				//this shouldn't happen
+				sb.append("\nUnknown Format!");
+				showText(sb);
+				return;
 			}
 			
 			
-			data.w = w;
-			data.h = h;
-			data.l = l;
 			
-		
-			try {
-				data.weOriginX = tag.getInteger("WEOriginX");
-				data.weOriginY = tag.getInteger("WEOriginY");
-				data.weOriginZ = tag.getInteger("WEOriginZ");
-			}catch(TagNotFoundException tnfe) {
-				//not a WorldEdit .schematic, ignore
-			}
 		
 			//actually convert the data now.
 			convert(data, sb);
@@ -2647,6 +3579,9 @@ public class S2CB extends JFrame {
 								//	System.out.println("air to replace");
 								//}
 								try {
+									if(block==null) {
+										continue;
+									}
 									if(block.type.isAir() && done[x][y][z]!=DONE_FORCEAIR) {
 											//this is not air, or is air that doesn't need to be encoded, or is already encoded (not sure how that would have happened, but...) 
 											done[x][y][z]=DONE_DONE;
@@ -2680,7 +3615,7 @@ public class S2CB extends JFrame {
 									if(pass==1 || !block.type.isSideAttached() ) {
 										//any undone block in pass 1, but only ones without wall attachment (issue&2)==1  in pass 0
 										
-										if(minimizeWater.isSelected() && (WATER_BLOCKS.contains(block.type))&& block.properties.contains("level=")) {//level will be stripped if it is 0
+										if(minimizeWater.isSelected() && (WATER_BLOCKS.contains(block.type))&& block.properties.contains("level=")&&!block.properties.contains("level=0")) {//level will be stripped if it is 0
 											continue;
 										}
 										
@@ -2708,22 +3643,25 @@ public class S2CB extends JFrame {
 	
 	private AppendVars doEntities(SchematicData data,ArrayList<String> cmds,StringBuilder psngrs,int cmdc,int volume, int OX, int OY, int OZ, int ox, int oy, int oz, int ow, int oh, int ol, int oy1, StringBuilder sb) {
 		appendTextNow("Adding entities...");
-		for(TagCompound etag:data.entities) {
+		if(data.entities == null || data.entities.size() == 0) {
+			return new AppendVars(cmdc,OX,OY,OZ);
+		}
 			
-							
+		Iterator<CompoundTag> it = data.entities.asCompoundTagList().iterator();
+		while(it.hasNext()) {
+			CompoundTag etag = it.next();
+										
 			StringBuilder summon = new StringBuilder();
 			try {
 				//Double x,y,z;
 				Number x = new Integer(0),y = new Integer(0),z = new Integer(0);
-				List<TagDouble> pos;
-				List<TagInteger> ipos;
+				ListTag<DoubleTag> pos;
+				ListTag<IntTag> ipos;
 				
-				TagCompound nbt = null;
-				try {
+				CompoundTag nbt = null;
+				if(etag.containsKey("nbt")){
 					//this will exist for structures, but not for schematics
-					 nbt = etag.getCompound("nbt");
-				}catch(TagNotFoundException e) {
-					//ignore
+					 nbt = etag.getCompoundTag("nbt");
 				}
 				if(nbt == null) {
 					nbt = etag;
@@ -2755,34 +3693,34 @@ public class S2CB extends JFrame {
 				}
 				
 				
-				if(etag.getTags().containsKey("blockPos")) {
-					ipos = etag.getList("blockPos", TagInteger.class);
+				if(etag.containsKey("blockPos")) {
+					ipos = etag.getListTag("blockPos").asIntTagList();
 					
-					x = new Integer( ipos.get(0).getValue() +ox);
-					y = new Integer( ipos.get(1).getValue() +oy);
-					z = new Integer( ipos.get(2).getValue() +oz);
-				}else if(etag.getTags().containsKey("pos")) {
-					pos = etag.getList("pos", TagDouble.class);
+					x = new Integer( ipos.get(0).asInt() +ox);
+					y = new Integer( ipos.get(1).asInt() +oy);
+					z = new Integer( ipos.get(2).asInt() +oz);
+				}else if(etag.containsKey("pos")) {
+					pos = etag.getListTag("pos").asDoubleTagList();
 				
-					x = new Double( pos.get(0).getValue() +ox);
-					y = new Double( pos.get(1).getValue() +oy);
-					z = new Double( pos.get(2).getValue() +oz);
-				}else if(etag.getTags().containsKey("Pos")) {
-					pos = etag.getList("Pos", TagDouble.class);
+					x = new Double( pos.get(0).asDouble() +ox);
+					y = new Double( pos.get(1).asDouble() +oy);
+					z = new Double( pos.get(2).asDouble() +oz);
+				}else if(etag.containsKey("Pos")) {
+					pos = etag.getListTag("Pos").asDoubleTagList();
 				
-					x = new Double( pos.get(0).getValue() +ox);
-					y = new Double( pos.get(1).getValue() +oy);
-					z = new Double( pos.get(2).getValue() +oz);
-				}else if(nbt.getTags().containsKey("TileX")) {
-					x = new Integer( nbt.getInteger("TileX") +ox);
-					y = new Integer( nbt.getInteger("TileY") +oy);
-					z = new Integer( nbt.getInteger("TileZ") +oz);
-				}else if(nbt.getTags().containsKey("pos")) {
-					pos = nbt.getList("pos", TagDouble.class);
+					x = new Double( pos.get(0).asDouble() +ox);
+					y = new Double( pos.get(1).asDouble() +oy);
+					z = new Double( pos.get(2).asDouble() +oz);
+				}else if(nbt.containsKey("TileX")) {
+					x = new Integer( nbt.getInt("TileX") +ox);
+					y = new Integer( nbt.getInt("TileY") +oy);
+					z = new Integer( nbt.getInt("TileZ") +oz);
+				}else if(nbt.containsKey("pos")) {
+					pos = nbt.getListTag("pos").asDoubleTagList();
 				
-					x = new Double( pos.get(0).getValue() +ox);
-					y = new Double( pos.get(1).getValue() +oy);
-					z = new Double( pos.get(2).getValue() +oz);
+					x = new Double( pos.get(0).asDouble() +ox);
+					y = new Double( pos.get(1).asDouble() +oy);
+					z = new Double( pos.get(2).asDouble() +oz);
 				}
 				
 				/*
@@ -2806,35 +3744,28 @@ public class S2CB extends JFrame {
 				//corrections (to get things to work correctly)
 				if(id.equals("painting") || id.equals("item_frame") ) {
 					
-					if(etag.getTags().containsKey("blockPos")) {
-						ipos = etag.getList("blockPos", TagInteger.class);
+					if(etag.containsKey("blockPos")) {
+						ipos = etag.getListTag("blockPos").asIntTagList();
 						
-						x = new Integer( ipos.get(0).getValue() +ox);
-						y = new Integer( ipos.get(1).getValue() +oy);
-						z = new Integer( ipos.get(2).getValue() +oz);
+						x = new Integer( ipos.get(0).asInt() +ox);
+						y = new Integer( ipos.get(1).asInt() +oy);
+						z = new Integer( ipos.get(2).asInt() +oz);
 						
-						/*if(nbt.getTags().containsKey("facing")) {
-							int facing = nbt.getByte("facing");
-							
-							if(facing != 1) {
-								x = new Double(x.doubleValue() - 1);
-								z = new Double(z.doubleValue() - 1);
-							}
-						}*/
-					}else if(etag.getTags().containsKey("TileX") ) {
-						x = new Integer(etag.getInteger("TileX") + ox);
-						y = new Integer(etag.getInteger("TileY") + oy);
-						z = new Integer(etag.getInteger("TileZ") + oz);
+
+					}else if(etag.containsKey("TileX") ) {
+						x = new Integer(etag.getInt("TileX") + ox);
+						y = new Integer(etag.getInt("TileY") + oy);
+						z = new Integer(etag.getInt("TileZ") + oz);
 						
 					} else {
 					
-						pos = etag.getList("Pos", TagDouble.class);
+						pos = etag.getListTag("Pos").asDoubleTagList();
 						//above code seems to work for recent schematics, but ones from older version don't always work.  Below code doesn't complete fix the older schematics.
-						if(etag.getTag("Direction")!=null) {
+						if(etag.containsKey("Direction")) {
 							//only older schematics will have a direction (pre 1.8)
-							x = Math.floor(new Double( pos.get(0).getValue() +ox));
-							y = Math.floor(new Double( pos.get(1).getValue() +oy));
-							z = Math.floor(new Double( pos.get(2).getValue() +oz));
+							x = Math.floor(new Double( pos.get(0).asDouble() +ox));
+							y = Math.floor(new Double( pos.get(1).asDouble() +oy));
+							z = Math.floor(new Double( pos.get(2).asDouble() +oz));
 						}
 					}
 				}
@@ -2843,7 +3774,7 @@ public class S2CB extends JFrame {
 				
 				//convert old schematic entities that are riding other entities, to be switchied around to be passengers. only need to check etag, as if it has an nbt tag its from a version far after the riding change.
 				//doing this after getting the position as the riders likely won't have the correct schematic offset, only the base entity's position would be relative to the schematic's 0,0,0 coords.
-				if(etag.getTags().containsKey("Riding")){
+				if(etag.containsKey("Riding")){
 					etag = fixRiding(etag);
 					id = etag.getString("id");
 					nbt = etag;
@@ -2862,13 +3793,14 @@ public class S2CB extends JFrame {
 				summon.append(" {");
 				
 				boolean needComma = false;
-				for(ITag t:nbt.getTags().values()) {
-					String name = t.getName();
+				for(Entry<String,Tag<?>> entry:nbt) {
+					String name = entry.getKey();
+					Tag t = entry.getValue();
 					
 					if(!"Pos".equals(name) && !"id".equals(name) && !name.startsWith("Tile")) 
 					{
 										
-						StringBuilder result = writeTag(t);
+						StringBuilder result = writeTag(t,name);
 						
 						if(result!=null) {
 							if(needComma)
@@ -2891,7 +3823,7 @@ public class S2CB extends JFrame {
 				OZ = v.OZ;
 				
 				
-			} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+			} catch (Exception e) {//TODO, be specific UnexpectedTagTypeException | TagNotFoundException e) {
 				sb.append("\n\nERROR: ");
 				sb.append(e.getClass().getName());
 				sb.append("  ");
@@ -2904,10 +3836,10 @@ public class S2CB extends JFrame {
 		return new AppendVars(cmdc,OX,OY,OZ);
 	}
 	
-	private TagCompound fixRiding(TagCompound tag) {
+	private CompoundTag fixRiding(CompoundTag tag) {
 		
 		try {
-			TagString id = tag.getTag("id", TagString.class);
+			StringTag id = tag.getStringTag("id");
 			String idstr = id.getValue();
 			//1.11 all lowercase now
 			idstr = idstr.toLowerCase();
@@ -2916,23 +3848,22 @@ public class S2CB extends JFrame {
 				idstr = entityNameMap.get(idstr);
 			}
 			id.setValue(idstr);
-		} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+		} catch (Exception e) {
 			e.printStackTrace();
 		}
 		
-		if(tag.getTags().containsKey("Riding")){
+		if(tag.containsKey("Riding")){
 			try {
-				TagCompound riding = tag.getCompound("Riding");
-				tag.removeTag(riding);
-				TagCompound base = fixRiding(riding); //to handle ent 1 riding ent 2 which is riding ent 3
-				List<ITag> pass = new ArrayList<ITag>();
+				CompoundTag riding = tag.getCompoundTag("Riding");
+				tag.remove("Riding");
+				CompoundTag base = fixRiding(riding); //to handle ent 1 riding ent 2 which is riding ent 3
+				//List<ITag> pass = new ArrayList<ITag>();
+				ListTag pass = new ListTag(CompoundTag.class);
 				pass.add(tag);
-				TagList passengers = new TagList("Passengers", pass);
-				riding.setTag(passengers);
-				riding.setName("");
+				riding.put("Passengers", pass);
 				
 				return base;
-			} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+			} catch (Exception e) {
 				e.printStackTrace();
 			}
 		}
@@ -3327,8 +4258,8 @@ public class S2CB extends JFrame {
 													sr[id].x = xx;
 													sr[id].y = yyf;
 													sr[id].z = zz;
-													sr[id].okBlocks = okblocks;
-													sr[id].badBlocks = badblocks;
+													//sr[id].okBlocks = okblocks;
+													//sr[id].badBlocks = badblocks;
 													//System.out.println(" "+xx+","+yy+","+zz+" gives "+points+" points  - "+okblocks+" ok, "+badblocks+" bad - "+okRatio+" ratio");
 												}
 											}
@@ -3803,7 +4734,7 @@ public class S2CB extends JFrame {
 						
 						Block block = data.getBlockAt(x+xx,y+yy,z+zz);
 						//keep track of block types as we dont want to clone if we can just fill
-						if(!AIR_BLOCKS.contains(block)) {
+						if(!AIR_BLOCKS.contains(block.type)) {
 							blockmap.add(block);
 							blockcount++;
 						}
@@ -4103,7 +5034,7 @@ public class S2CB extends JFrame {
 		Block AIR = new Block();
 		AIR.type = BLOCK_TYPES.get("air");
 		AIR.properties = "";
-		AIR.compound = new TagCompound("air");
+		AIR.compound = new CompoundTag();
 		
 		int h = data.h,hh = h-1;
 		int l = data.l,ll = l-1;
@@ -4262,10 +5193,6 @@ public class S2CB extends JFrame {
 					
 					if(done[x][y][z]!=DONE_DONE) {
 						Block block = data.getBlockAt(x,y,z);
-						
-						if(x==2 && y==2&& z==4) {
-							System.out.println("here");
-						}
 
 						if(block.type.isRail()) {
 							//we have a rail - need to place it
@@ -4839,7 +5766,7 @@ public class S2CB extends JFrame {
 		String cmd = null;
 		StringBuilder dataTag = new StringBuilder();
 		
-		if(noDangerousBlocks.isSelected() && ArrayUtils.contains(dangerousBlocks, block.type.name)) {
+		if(noDangerousBlocks.isSelected() && dangerousBlocks.contains(block.type.name)) {
 			return new AppendVars(cmdc, OX, OY, OZ);
 		}
 		
@@ -5162,21 +6089,28 @@ public class S2CB extends JFrame {
 	}
 	
 	
-	
+
 	private void buildBlockCache() {
 		//block don't appear to be in any particular order (mcedit seems to produce an order, but not actual minecraft exported structures)
 		//so build a hashmap allowing quicker lookup of blocks
-		for(TagCompound bl : data.blockList) {
+		Iterator<CompoundTag> it = data.blockList.asCompoundTagList().iterator();
+		while(it.hasNext()) {
+			CompoundTag bl = it.next();
 			try {
-				List<TagInteger> pos = bl.getList("pos", TagInteger.class);
-				int x = pos.get(0).getValue();
-				int y = pos.get(1).getValue();
-				int z = pos.get(2).getValue();
+				ListTag<IntTag> pos = bl.getListTag("pos").asIntTagList();
+				int x = pos.get(0).asInt();
+				int y = pos.get(1).asInt();
+				int z = pos.get(2).asInt();
 				
-				int stateIdx = bl.getInteger("state");
+				int stateIdx = bl.getInt("state");
 				if(stateIdx>=0) {
-					TagCompound state = data.palette.get(stateIdx);
-					String name = state.getString("Name");
+					Tag state = data.palette.get(stateIdx);
+					String name = "";
+					CompoundTag stateTag = null;
+					if(state instanceof CompoundTag) {
+						stateTag = ((CompoundTag)state);
+						name = stateTag.getString("Name");
+					}
 					
 					if(name.startsWith("minecraft:")) {
 						name = name.substring(10);
@@ -5186,54 +6120,434 @@ public class S2CB extends JFrame {
 					b.type = BLOCK_TYPES.get(name);
 					
 					if(b.type == null) {
-						System.out.println("Unknown block type found: "+state.getString("Name"));
-						appendTextNow("Unknown block type found: "+state.getString("Name"));
+						System.out.println("Unknown block type found: "+name);
+						appendTextNow("Unknown block type found: "+name);
 						BlockType t = new BlockType(name,false,true,true,false,true,false,true);//assume the worst
 						BLOCK_TYPES.put(name, t);
 						b.type = t;
 					}
 					
-					StringBuilder sb = new StringBuilder();
-					Map<String, ITag> children = state.getTags();
-					if(children.containsKey("Properties")){
-						TagCompound properties = state.getCompound("Properties");
-						boolean first = true;
-						for(ITag prop : properties.getTags().values()) {
-							if(prop instanceof TagString) {
-								String val = ((TagString) prop).getValue();
-								//optimization to throw away 'false' properties, assuming false is the default for all 'boolean' properties
-								if(!val.equals("false")) {
-									
-									//some block optimization
-									if(name.equals("redstone_wire") && ignoreWirePower.isSelected() ) {
-										if(prop.getName().equals("power"))
-											continue;
-										if(val.equals("none")) //this will reduce the wire shape properties to only those actually needed
-											continue;
-									}
-									
-									if(!first) {
-										sb.append(",");
-									}else {
-										first = false;
-									}
-									sb.append(prop.getName());
-									sb.append("=");
-									sb.append(val);
-								}
-							}
-						}
-					}
-					b.properties = sb.toString();
+					
+					b.properties = getBlockProperties(stateTag, name, data.dataVersion);
 					b.compound = bl;
 					
 					data.setBlockAt(x, y, z, b);
 				}
-			}catch(TagNotFoundException|UnexpectedTagTypeException e) {
+			}catch(Exception e) {
 				e.printStackTrace();
 			}
 		}
 		
+	}
+	
+	void buildBlockCacheLitematic(CompoundTag regions) {
+		
+		Iterator<Tag<?>> it = regions.values().iterator();
+		
+
+		if(it.hasNext()) {
+			Tag reg = it.next();
+			if(reg instanceof CompoundTag) {
+
+				CompoundTag region = (CompoundTag)reg;
+				data.blockList = new ListTag(CompoundTag.class);
+				data.palette = new ListTag(CompoundTag.class);
+				data.palette.addAll(region.getListTag("BlockStatePalette").values());//so that this list is modifiable
+				ListTag<?> tileEntities = region.getListTag("TileEntities");
+					
+				//TODO rest of conversion - need to decode the blockstates
+				LongArrayTag blockStates = region.getLongArrayTag("BlockStates");
+				CompoundTag size = region.getCompoundTag("Size");
+				CompoundTag pos = region.getCompoundTag("Position");
+
+				int w = size.getInt("x");
+				int h = size.getInt("y");
+				int l = size.getInt("z");
+				int xs = pos.getInt("x");
+				int ys = pos.getInt("y");
+				int zs = pos.getInt("z");
+				
+				int sizeLayer = Math.abs(w*l);
+				int totalVolume = Math.abs(sizeLayer * h);
+				int bits = Math.max(2, Integer.SIZE - Integer.numberOfLeadingZeros(data.palette.size() - 1));
+				
+				LitematicaBitArray storage = new LitematicaBitArray(bits, totalVolume, blockStates.getValue());
+				
+				//TODO - figure out the possible negative size stuff when I get an example.
+				//handle negative size
+				int xstep = w>0 ? 1 : -1;
+				int ystep = h>0 ? 1 : -1;
+				int zstep = l>0 ? 1 : -1;
+				int xend = xs + w;
+				int yend = ys + h;
+				int zend = zs + l;
+				
+				for(int y=ys; y!=yend; y+=ystep) { //for(int y=0; y!=ys;y=(ys>y)?++y:--y) {
+					for(int x=xs; x!=xend; x+=xstep) {
+						for(int z=zs; z!=zend; z+=zstep) {
+							
+							CompoundTag stateTag = getPaletteForLocLitematic(storage, sizeLayer, Math.abs(w), x,y,z);
+							
+							String name = stateTag.getString("Name");
+							if(name.startsWith("minecraft:")) {
+								name = name.substring(10);
+							}
+							
+							Block b = new Block();
+							b.type = BLOCK_TYPES.get(name);
+							
+							if(b.type == null) {
+								System.out.println("Unknown block type found: "+name);
+								appendTextNow("Unknown block type found: "+name);
+								BlockType t = new BlockType(name,false,true,true,false,true,false,true);//assume the worst
+								BLOCK_TYPES.put(name, t);
+								b.type = t;
+							}
+							
+							b.properties = getBlockProperties(stateTag, name, data.dataVersion);
+							b.compound = getTileEntitiyData(tileEntities,x,y,z);
+
+							//int realx = x + xs;
+							//int realy = y + ys;
+							//int realz = z + zs;
+							
+							data.setBlockAt(x, y, z, b);
+						}
+					}
+				}
+				
+				//entities - add offset to entity location
+				if(data.entities == null) {
+					data.entities = new ListTag(CompoundTag.class);
+				}
+				
+				ListTag ents = region.getListTag("Entities");
+				Iterator<Tag<?>> eit = ents.iterator();
+				while(eit.hasNext()) {
+					Tag<?> t = eit.next();
+					if(t instanceof CompoundTag) {
+						CompoundTag ent = (CompoundTag)t;
+						
+						if(ent.containsKey("Pos") && ent.get("Pos") instanceof ListTag<?>) {
+							
+							ListTag<?> entpos = ent.getListTag("Pos");
+							try {
+								DoubleTag dx = (DoubleTag) entpos.get(0);
+								DoubleTag dy = (DoubleTag) entpos.get(1);
+								DoubleTag dz = (DoubleTag) entpos.get(2);
+								dx.setValue(dx.asDouble() + xs);
+								dy.setValue(dy.asDouble() + ys);
+								dz.setValue(dz.asDouble() + zs);
+							}catch(Exception e) {
+								e.printStackTrace();
+							}
+						}
+						try {
+							data.entities.asCompoundTagList().add(ent);
+						}catch(Exception e) {
+							e.printStackTrace();
+						}
+					}
+				}
+				
+			}
+		}
+		
+	}
+	
+	
+	void buildBlockCacheSponge(CompoundTag tag) {
+		
+		int paleteMax = tag.getInt("PaletteMax");
+		CompoundTag paletteTag = tag.getCompoundTag("Palette");
+		ListTag tileEntities = tag.getListTag("BlockEntities");
+		if (tileEntities == null) {
+            tileEntities = tag.getListTag("TileEntities");
+        }
+		
+		Block[] palette = new Block[paleteMax];
+		
+		//create optimized palette
+		Iterator<Entry<String,Tag<?>>> pit = paletteTag.iterator();
+		while(pit.hasNext()) {
+			Entry<String,Tag<?>> entry = pit.next();
+			String block = entry.getKey();
+			int index = 0;
+			Tag<?> t = entry.getValue();
+			if(t instanceof ByteTag) {
+				index = ((ByteTag)t).asInt();
+			}
+			if(t instanceof ShortTag) {
+				index = ((ShortTag)t).asInt();
+			}
+			if(t instanceof IntTag) {
+				index = ((IntTag)t).asInt();
+			}
+						
+			String[] blockdata = cleanSpongeBlock(block);
+			
+			String name = blockdata[0];
+			if(name.startsWith("minecraft:")) {
+				name = name.substring(10);
+			}
+			
+			Block b = new Block();
+			b.type = BLOCK_TYPES.get(name);
+			
+			if(b.type == null) {
+				System.out.println("Unknown block type found: "+name);
+				appendTextNow("Unknown block type found: "+name);
+				BlockType bt = new BlockType(name,false,true,true,false,true,false,true);//assume the worst
+				BLOCK_TYPES.put(name, bt);
+				b.type = bt;
+			}
+			
+			b.properties = blockdata[1];
+			
+			palette[index] = b;
+		}
+		
+
+
+		//make a cache of tile entities for quicker lookup
+		HashMap<Integer,CompoundTag> tileEntCache = new HashMap<Integer,CompoundTag>();
+		Iterator<Tag<?>> it = tileEntities.iterator();
+		while(it.hasNext()) {
+    		Tag<?> next = it.next();
+    		if(next instanceof CompoundTag) {
+				CompoundTag te = (CompoundTag)next;
+				int x=0,y=0,z=0;
+	    		try {
+	    			if(te.containsKey("Pos") && te.get("Pos") instanceof IntArrayTag) {
+						IntArrayTag pos = te.getIntArrayTag("Pos");
+						if(pos.length() == 3) {
+							int[] p = pos.getValue();
+			    			x = p[0];
+			    			y = p[1];
+			    			z = p[2];
+	    			
+			    			tileEntCache.put(SchematicConverter.getLocation(x,y,z), te);
+						}
+	    			}
+	    		}catch (Exception e) {
+					System.out.println("bad tile entity at "+x+","+y+","+z);
+					e.printStackTrace();
+				}
+    		}
+		}
+		
+		
+		
+		//the rest of this function somewhat copied from WorldEdit source code.
+		
+		byte[] blocks = tag.getByteArray("BlockData");
+		
+		int index = 0;
+        int i = 0;
+        int value;
+        int varintLength;
+        int width = data.w;
+        int length = data.l;
+        while (i < blocks.length) {
+            value = 0;
+            varintLength = 0;
+
+            while (true) {
+                value |= (blocks[i] & 127) << (varintLength++ * 7);
+                if (varintLength > 5) {
+                    //throw new IOException("VarInt too big (probably corrupted data)");
+                }
+                if ((blocks[i] & 128) != 128) {
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            // index = (y * length * width) + (z * width) + x
+            int y = index / (width * length);
+            int z = (index % (width * length)) / width;
+            int x = (index % (width * length)) % width;
+            
+            Block bl = palette[value].clone();//BlockState state = palette.get(value);
+            bl.compound = tileEntCache.get(SchematicConverter.getLocation(x,y,z));
+            
+            data.setBlockAt(x, y, z, bl);
+
+            index++;
+        }
+		
+
+		
+	}
+	
+	
+	
+	public CompoundTag getTileEntitiyData(ListTag entities, int x, int y, int z) {
+		Iterator<Tag<?>> it = entities.iterator();
+		while(it.hasNext()) {
+			Tag<?> t = it.next();
+			if(t instanceof CompoundTag) {
+				CompoundTag ent = (CompoundTag)t;
+				
+				if(ent.containsKey("x") && ent.getInt("x") == x) {
+					if(ent.containsKey("y") && ent.getInt("y") == y) {
+						if(ent.containsKey("z") && ent.getInt("z") == z) {
+							return ent;
+						}
+					}
+				}
+				if(ent.containsKey("Pos") && ent.get("Pos") instanceof IntArrayTag) {
+					IntArrayTag pos = ent.getIntArrayTag("Pos");
+					if(pos.length() == 3) {
+						int[] p = pos.getValue();
+						if(p[0] == x && p[1] == y && p[2] == z) {
+							return ent;
+						}
+					}
+				}
+			}
+		}
+		return null;
+	}
+	
+	public CompoundTag getPaletteForLocLitematic(LitematicaBitArray store, int sizeLayer, int width, int x, int y, int z) {
+		int xx = Math.abs(x);
+		int yy = Math.abs(y);
+		int zz = Math.abs(z);
+		
+		long index = ((long) yy * sizeLayer) + (long) zz * (long) width + (long) xx;
+		return (CompoundTag) data.palette.get(store.getAt(index));
+
+	}
+	
+	String[] cleanSpongeBlock(String block) {
+		//cleans up a string describing a block (name and properties) from a Sponge format save file. 
+		//This is the equivalent of getBlockProperties for other format types (.nbt structure / litematic) 
+		//basically, deletes properties that are set to the default value and separates block type from properties
+		
+		String[] result = new String[2];
+		result[1] = "";
+		
+		int propStart = block.indexOf('[');
+		int propEnd = block.lastIndexOf(']');
+		
+		String[] properties = new String[0];
+		if(propStart > 0 && propEnd > 0) {
+			result[0] = block.substring(0, propStart);
+			properties = block.substring(propStart+1,propEnd).split(",");
+		} else {
+			result[0] = block;
+		}
+	
+		for(String s : properties) {
+			String[] parts = s.split("=");
+			
+			//upgrade walls to 1.16
+			if(result[0].endsWith("_wall")) {
+				if(SIDES.contains(parts[0])) {
+					//sides used to be true / false, but are now, none, low, tall.  
+					//Convert true to low, as that will leave the look walls previously had if stacked (but updates might convert correctly to tall...)
+					if(parts[1].equals("false")){
+						parts[1] = "none";
+					}
+					if(parts[1].equals("true")){
+						parts[1] = "low";
+					}
+				}
+			}
+			
+			if(parts.length == 2) {
+				if( parts[0].equals("lit") || (!parts[1].equals("false") && !parts[1].equals("none") && !parts[1].equals("0"))) {
+					//lit is backwards, true is default - be safe and leave lit specified.
+					if(result[1] == null || result[1].length() == 0) {
+						result[1] = parts[0]+"="+parts[1];
+					}else {
+						result[1] += ","+parts[0]+"="+parts[1];
+					}
+				}
+			}else {
+				//not sure what is going on, keep the whole thing
+				if(result[1] == null  || result[1].length() == 0) {
+					result[1] = s;
+				}else {
+					result[1] += ","+s;
+				}
+			}
+		}
+		
+		return result;
+	}
+	
+	String getBlockProperties(CompoundTag stateTag, String name, int version) {
+		StringBuilder sb = new StringBuilder();
+		
+		
+		
+		if(stateTag != null && stateTag.containsKey("Properties")){
+			CompoundTag properties = stateTag.getCompoundTag("Properties");
+			boolean first = true;
+
+			for(Entry<String,Tag<?>> prop : properties.entrySet()) {
+				if(prop.getValue() instanceof StringTag) {
+					String val = ((StringTag) prop.getValue()).getValue();
+					String propName = prop.getKey();
+					
+					//upgrade wall to 1.16
+					if(name.endsWith("_wall") && SIDES.contains(propName)) {
+						//sides used to be true / false, but are now, none, low, tall.  
+						//Convert true to low, as that will leave the look walls previously had if stacked (but updates might convert correctly to tall...)
+						if(val.equals("false")){
+							val = "none";
+						}
+						if(val.equals("true")){
+							val.equals("low");
+						}
+					}
+					
+					
+					
+					//optimization to throw away 'false' properties, assuming false is the default for all 'boolean' properties
+					if(!val.equals("false") || propName.equals("lit") || (name.contains("coral") && propName.equals("waterlogged")) ) {  //campfire lit property defaults to true as does coral waterlogged property
+						
+						//some block optimization
+						if(name.equals("redstone_wire")) {
+							if(propName.equals("power")  && ignoreWirePower.isSelected() ) 
+								continue;
+							if(propName.equals("power") && val.equals("0")) {
+								continue;
+							}
+							if(redstoneDotsToPluses.isSelected() && version < MINECRAFT_VER_1_16) {
+								if(SIDES.contains(propName)) {
+									boolean isdot = true;
+									for(String side:SIDES){
+										if(properties.containsKey(side) && !properties.getString(side).equals("none")) {
+											isdot = false;
+										}
+									}
+									if(isdot) {
+										val = "side";
+									}
+								}
+								
+							}
+							if(val.equals("none")) //this will reduce the wire shape properties to only those actually needed
+								continue;
+						}
+						
+						if(!first) {
+							sb.append(",");
+						}else {
+							first = false;
+						}
+						sb.append(propName);
+						sb.append("=");
+						sb.append(val);
+					}
+				}
+			}
+		}
+		
+		return sb.toString();
 	}
 	
 	/*
@@ -5286,21 +6600,27 @@ public class S2CB extends JFrame {
 	private void getTileEntityData(StringBuilder sb, Block block) {
 		if(block.compound != null) {
 			try {
-				getTileEntityData(sb, block.compound.getCompound("nbt"));
-			} catch (UnexpectedTagTypeException e) {
+				if(block.compound.containsKey("nbt")) {
+					getTileEntityData(sb, block.compound.getCompoundTag("nbt"));
+				} else {
+					getTileEntityData(sb, block.compound);
+				}
+			} catch (Exception e) {
 				//ignore - bad tile entity data
-			} catch (TagNotFoundException e) {
-				//ignore - bad tile entity data
+				System.err.print("Bad Tile Entity Data!");
+				e.printStackTrace();
 			}
 		}
 	}
-	private void getTileEntityData(StringBuilder sb, TagCompound te) {
+	private void getTileEntityData(StringBuilder sb, CompoundTag te) {
 		boolean needComma = false;
-		for(ITag t:te.getTags().values()) {
-			String name = t.getName();
-			if("x".equals(name) || "y".equals(name) || "z".equals(name) || "id".equals(name) )
+
+		for(Entry<String, Tag<?>> entry:te.entrySet()) {
+			Tag<?> tag = entry.getValue();
+			String name = entry.getKey();
+			if("x".equals(name) || "y".equals(name) || "z".equals(name) || "id".equals(name) || "Id".equals(name) || "Pos".equals(name))
 				continue;
-			StringBuilder result = writeTag(t);
+			StringBuilder result = writeTag(tag,name);
 			if(result!=null) {
 				if(needComma) 
 					sb.append(",");
@@ -5312,14 +6632,13 @@ public class S2CB extends JFrame {
 	}
 	
 	
-	public StringBuilder writeTag( ITag t) {
+	public StringBuilder writeTag( Tag<?> t, String name) {
 		
-		return writeTag(t,true,false,false,false,false,false);
+		return writeTag(t,name,true,false,false,false,false,false);
 	}
 	
-	public StringBuilder writeTag( ITag t,boolean ignorezero,boolean isItems,boolean isPotion,boolean isSpawnEgg, boolean isWrittenBook, boolean escape) {
+	public StringBuilder writeTag( Tag<?> t,String name, boolean ignorezero,boolean isItems,boolean isPotion,boolean isSpawnEgg, boolean isWrittenBook, boolean escape) {
 		StringBuilder sb = new StringBuilder();
-		String name = t.getName();
 		
 		//optimize entities
 		if(minimizeEntities.isSelected()) {
@@ -5339,10 +6658,10 @@ public class S2CB extends JFrame {
 //			t=t;
 //		}
 		
-		switch (t.getTagID()){
+		switch (t.getID()){
 			case 1:{
-				TagByte tag = (TagByte)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				ByteTag tag = (ByteTag)t;
+				if(!ignorezero || tag.asByte()!=0) {
 					if(name!=null&&name.length()>0) {
 						if(name.equalsIgnoreCase("dir")){
 							//ignore, should be a direction that uses the same values as current 'facing'
@@ -5354,13 +6673,13 @@ public class S2CB extends JFrame {
 							sb.append(":");
 						}
 					}
-					sb.append(tag.getValue());
+					sb.append(tag.asByte());
 				}
 				break;
 			}
 			case 2:{
-				TagShort tag = (TagShort)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				ShortTag tag = (ShortTag)t;
+				if(!ignorezero || tag.asShort()!=0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
@@ -5369,7 +6688,7 @@ public class S2CB extends JFrame {
 					
 					if(isItems && name.equals("id")) {
 						//sb.append(itemIdToStirng(tag.getValue()));
-						sb.append(tag.getValue());
+						sb.append(tag.asShort());
 					}else /*if(isPotion && name.equals("Damage")) {
 						sb.setLength(0);
 						sb.append("tag:{Potion:");
@@ -5381,64 +6700,64 @@ public class S2CB extends JFrame {
 						sb.append(mobNames.get((int)tag.getValue()));
 						sb.append("}}");
 					}else */{
-						sb.append(tag.getValue());
+						sb.append(tag.asShort());
 						
 					}
 				}
 				break;
 			}
 			case 3:{
-				TagInteger tag = (TagInteger)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				IntTag tag = (IntTag)t;
+				if(!ignorezero || tag.asInt()!=0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
 					}
-					sb.append(tag.getValue());
+					sb.append(tag.asInt());
 				}
 				break;
 			}
 			case 4:{
-				TagLong tag = (TagLong)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				LongTag tag = (LongTag)t;
+				if(!ignorezero || tag.asLong()!=0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
 					}
 
 					
-					sb.append(tag.getValue());
+					sb.append(tag.asLong());
 					sb.append("L");
 				}
 				break;
 			}
 			case 5:{
-				TagFloat tag = (TagFloat)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				FloatTag tag = (FloatTag)t;
+				if(!ignorezero || tag.asFloat()!=0) {
 					
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
 					}
-					sb.append(tag.getValue());
+					sb.append(tag.asFloat());
 					sb.append("f");
 				}
 				break;
 			}
 			case 6:{
-				TagDouble tag = (TagDouble)t;
-				if(!ignorezero || tag.getValue()!=0) {
+				DoubleTag tag = (DoubleTag)t;
+				if(!ignorezero || tag.asDouble()!=0) {
 					
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
 					}
-					sb.append(tag.getValue());
+					sb.append(tag.asDouble());
 				}
 				break;
 			}
 			case 7:{
-				TagByteArray tag = (TagByteArray)t;
+				ByteArrayTag tag = (ByteArrayTag)t;
 				byte[] bytes = tag.getValue();
 				if(!ignorezero || bytes.length!=0) {
 					if(name!=null&&name.length()>0) {
@@ -5460,7 +6779,7 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 8:{
-				TagString tag = (TagString)t;
+				StringTag tag = (StringTag)t;
 				String str = tag.getValue();
 				//if(name!=null && name.equalsIgnoreCase("customname")) {
 				//	name = name+"";
@@ -5528,9 +6847,8 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 9:{
-				TagList tag = (TagList)t;
-				List<ITag> l = tag.getTags();
-				if(!ignorezero || l.size()>0) {
+				ListTag<?> tag = (ListTag<?>)t;
+				if(!ignorezero || tag.size()>0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
@@ -5543,8 +6861,8 @@ public class S2CB extends JFrame {
 							//check to see if all are empty, and if so, ignore
 							boolean any = false;
 							
-							for(ITag tt:l) {
-								StringBuilder result = writeTag(tt,true,false,false,false,false,false);
+							for(Tag<?> tt: tag) {
+								StringBuilder result = writeTag(tt,"",true,false,false,false,false,false);
 								if(result!=null) {
 									any = true;
 								}
@@ -5558,8 +6876,8 @@ public class S2CB extends JFrame {
 							StringBuilder[] sbs =new StringBuilder[5];
 							int count = 0;
 							sb.setLength(0);
-							for(ITag tt:l) {
-								StringBuilder result = writeTag(tt,true,false,false,false,false,false);
+							for(Tag<?> tt: tag) {
+								StringBuilder result = writeTag(tt,"",true,false,false,false,false,false);
 								if(count<5) {
 									sbs[count] = result;
 								}
@@ -5599,15 +6917,15 @@ public class S2CB extends JFrame {
 					boolean subItems = name.equals("Items");
 					sb.append("[");
 					boolean needComma = false;
-					for(ITag tt:l) {
-						StringBuilder result = writeTag(tt,subItems,subItems,false,false,isWrittenBook,false);
+					for(Tag<?> tt: tag) {
+						StringBuilder result = writeTag(tt,"",subItems,subItems,false,false,isWrittenBook,false);
 						if(result!=null) {
 							if(needComma)
 								sb.append(",");
 							else
 								needComma = true;
 							
-							if(name.equalsIgnoreCase("pages") && tt instanceof TagString && isWrittenBook ) {//pages works fine this way for 'written_book' but not for 'writable_book'
+							if(name.equalsIgnoreCase("pages") && tt instanceof StringTag && isWrittenBook ) {//pages works fine this way for 'written_book' but not for 'writable_book'
 								//convert 'page string' to tellraw json format so newlines work in commands
 								//StringBuilder raw = new StringBuilder();
 								//raw.append("\"{text:");
@@ -5624,9 +6942,8 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 10:{
-				TagCompound tag = (TagCompound)t;
-				Collection<ITag> l = tag.getTags().values();
-				if(!ignorezero || l.size()>0) {
+				CompoundTag tag = (CompoundTag)t;
+				if(!ignorezero || tag.size()>0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
@@ -5637,33 +6954,39 @@ public class S2CB extends JFrame {
 					boolean isEgg = false;
 					boolean isWBook = isWrittenBook;
 					if(isItems) {
-						for(ITag tt:l) {
+						for(Entry<String,Tag<?>> ttEntry:tag) {
+							Tag<?> tt = ttEntry.getValue();
+							String ttName = ttEntry.getKey();
 							//potion - need to convert id to name based on damage (splash used to be in data), and also convert damage to potion name
-							if(tt.getName().equals("id") && ((tt.getTagID()==2 && ((TagShort)tt).getValue()==373) || 
-									(tt.getTagID()==8 && (((TagString)tt).getValue().equals("minecraft:potion") || ((TagString)tt).getValue().equals("potion")) ) )) {
+							if(ttName.equals("id") && ((tt.getID()==2 && ((ShortTag)tt).asShort()==373) || 
+									(tt.getID()==8 && (((StringTag)tt).getValue().equals("minecraft:potion") || ((StringTag)tt).getValue().equals("potion")) ) )) {
 								isPot=true;
-								for(ITag ttt:l) {
-									if(ttt.getName().equals("Damage") && ttt.getTagID()==2 && ((((TagShort)ttt).getValue())&16384)>0) {
-										if(tt.getTagID()==2) {
-											((TagShort)tt).setValue((short)438);
-										}else if( tt.getTagID()==8) {
-											((TagString)tt).setValue("minecraft:splash_potion");
+								for(Entry<String,Tag<?>> tttEntry:tag) {
+									Tag<?> ttt = tttEntry.getValue();
+									String tttName = ttEntry.getKey();
+									if(tttName.equals("Damage") && ttt.getID()==2 && ((((ShortTag)ttt).asShort())&16384)>0) {
+										if(tt.getID()==2) {
+											((ShortTag)tt).setValue((short)438);
+										}else if( tt.getID()==8) {
+											((StringTag)tt).setValue("minecraft:splash_potion");
 										}
 									}
 								}
-							}else if(tt.getName().equals("id") && tt.getTagID()==2 && ((TagShort)tt).getValue()==383) {
+							}else if(ttName.equals("id") && tt.getID()==2 && ((ShortTag)tt).asShort()==383) {
 								//spawn egg - need to convert damage into EntityTag
 								isEgg = true;
-							}else if(tt.getName().equals("id") && ((tt.getTagID()==2 && ((TagShort)tt).getValue()==387) || (tt.getTagID()==8 && 
-									(((TagString)tt).getValue().equals("minecraft:written_book") || ((TagString)tt).getValue().equals("written_book"))))){
+							}else if(ttName.equals("id") && ((tt.getID()==2 && ((ShortTag)tt).asShort()==387) || (tt.getID()==8 && 
+									(((StringTag)tt).getValue().equals("minecraft:written_book") || ((StringTag)tt).getValue().equals("written_book"))))){
 								isWBook = true;
 							}
 						}
 					}	
 					
 					boolean needComma = false;
-					for(ITag tt:l) {
-						StringBuilder result = writeTag(tt,isItems,isItems,isPot,isEgg,isWBook,false);
+					for(Entry<String,Tag<?>> ttEntry:tag) {
+						Tag<?> tt = ttEntry.getValue();
+						String ttName = ttEntry.getKey();
+						StringBuilder result = writeTag(tt,ttName,isItems,isItems,isPot,isEgg,isWBook,false);
 						if(result!=null) {
 							if(needComma)
 								sb.append(",");
@@ -5678,14 +7001,14 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 11:{
-				TagIntegerArray tag = (TagIntegerArray)t;
-				int[] ints = tag.getValues();
+				IntArrayTag tag = (IntArrayTag)t;
+				int[] ints = tag.getValue();
 				if(!ignorezero || ints.length!=0) {
 					if(name!=null&&name.length()>0) {
 						sb.append(name);
 						sb.append(":");
 					}
-					sb.append("[");
+					sb.append("[I;");
 					boolean first = true;
 					for(int i:ints) {
 						if(first) {
@@ -5700,6 +7023,22 @@ public class S2CB extends JFrame {
 				}
 				break;
 			}
+			case 12:{
+				LongArrayTag tag = (LongArrayTag)t;
+				long[] longs = tag.getValue();
+				sb.append("[L;");
+				boolean first = true;
+				for(long l:longs) {
+					if(first) {
+						first=false;
+					}else {
+						sb.append(",");
+					}
+					sb.append(l);
+				}
+				sb.append("]");
+				break;
+			}
 		}
 		
 		if(sb!=null && sb.length() >0) {
@@ -5711,46 +7050,45 @@ public class S2CB extends JFrame {
 		return null;
 	}
 	
-	public StringBuilder writeTagSimple( ITag t) {
+	public StringBuilder writeTagSimple( Tag<?> t, String name) {
 		StringBuilder sb = new StringBuilder();
-		String name = t.getName();
 		
 		sb.append(name);
 		sb.append('=');
 	
-		switch (t.getTagID()){
+		switch (t.getID()){
 			case 1:{
-				TagByte tag = (TagByte)t;
-				sb.append(tag.getValue());
+				ByteTag tag = (ByteTag)t;
+				sb.append(tag.asByte());
 				break;
 			}
 			case 2:{
-				TagShort tag = (TagShort)t;
-				sb.append(tag.getValue());
+				ShortTag tag = (ShortTag)t;
+				sb.append(tag.asShort());
 				break;
 			}
 			case 3:{
-				TagInteger tag = (TagInteger)t;
-				sb.append(tag.getValue());
+				IntTag tag = (IntTag)t;
+				sb.append(tag.asInt());
 				break;
 			}
 			case 4:{
-				TagLong tag = (TagLong)t;
-				sb.append(tag.getValue());
+				LongTag tag = (LongTag)t;
+				sb.append(tag.asLong());
 				break;
 			}
 			case 5:{
-				TagFloat tag = (TagFloat)t;
-				sb.append(tag.getValue());
+				FloatTag tag = (FloatTag)t;
+				sb.append(tag.asFloat());
 				break;
 			}
 			case 6:{
-				TagDouble tag = (TagDouble)t;
-				sb.append(tag.getValue());
+				DoubleTag tag = (DoubleTag)t;
+				sb.append(tag.asDouble());
 				break;
 			}
 			case 7:{
-				TagByteArray tag = (TagByteArray)t;
+				ByteArrayTag tag = (ByteArrayTag)t;
 				byte[] bytes = tag.getValue();
 				sb.append("[");
 				boolean first = true;
@@ -5766,19 +7104,18 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 8:{
-				TagString tag = (TagString)t;
+				StringTag tag = (StringTag)t;
 				String str = tag.getValue();
 				sb.append(escapeQuotesSlash(str));//was StringEscapeUtils.escapeJava
 				break;
 			}
 			case 9:{
-				TagList tag = (TagList)t;
-				List<ITag> l = tag.getTags();
+				ListTag<?> tag = (ListTag<?>)t;
 				
 				sb.append("[");
 				boolean needComma = false;
-				for(ITag tt:l) {
-					StringBuilder result = writeTag(tt,false,false,false,false,false,false);
+				for(Tag<?> tt: tag) {
+					StringBuilder result = writeTag(tt,"",false,false,false,false,false,false);
 					if(result!=null) {
 						if(needComma) {
 							sb.append(",");
@@ -5794,13 +7131,14 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 10:{
-				TagCompound tag = (TagCompound)t;
-				Collection<ITag> l = tag.getTags().values();
+				CompoundTag tag = (CompoundTag)t;
 				sb.append("{");
 					
 				boolean needComma = false;
-				for(ITag tt:l) {
-					StringBuilder result = writeTag(tt,false,false,false,false,false,false);
+				for(Entry<String,Tag<?>> ttEntry:tag) {
+					Tag<?> tt = ttEntry.getValue();
+					String ttName = ttEntry.getKey();
+					StringBuilder result = writeTag(tt,ttName,false,false,false,false,false,false);
 					if(result!=null) {
 						if(needComma)
 							sb.append(",");
@@ -5815,9 +7153,9 @@ public class S2CB extends JFrame {
 				break;
 			}
 			case 11:{
-				TagIntegerArray tag = (TagIntegerArray)t;
-				int[] ints = tag.getValues();
-				sb.append("[");
+				IntArrayTag tag = (IntArrayTag)t;
+				int[] ints = tag.getValue();
+				sb.append("[I;");
 				boolean first = true;
 				for(int i:ints) {
 					if(first) {
@@ -5826,6 +7164,22 @@ public class S2CB extends JFrame {
 						sb.append(",");
 					}
 					sb.append(i);
+				}
+				sb.append("]");
+				break;
+			}
+			case 12:{
+				LongArrayTag tag = (LongArrayTag)t;
+				long[] longs = tag.getValue();
+				sb.append("[L;");
+				boolean first = true;
+				for(long l:longs) {
+					if(first) {
+						first=false;
+					}else {
+						sb.append(",");
+					}
+					sb.append(l);
 				}
 				sb.append("]");
 				break;
@@ -6024,17 +7378,18 @@ public class S2CB extends JFrame {
 		}
 	}
 	
-	public enum Format{ SCHEMATIC, STRUCTURE};  //.nbt is structure
+	public enum Format{ SCHEMATIC, STRUCTURE, LITEMATIC, SPONGE};  //.nbt is structure, .litematic is litematic, .schem is sponge (modern WorldEdit)
 
 	static class SchematicData{
 		Format format = Format.SCHEMATIC;
+		int dataVersion = 0;
 		
 		int w=0,h=0,l=0;
 		int ox = 0, oy = 0, oz = 0;
 		
-		List<TagCompound> blockList = null;
-		List<TagCompound> palette = null;
-		List<TagCompound> entities = null;
+		ListTag blockList = null;
+		ListTag palette = null;
+		ListTag<?> entities = null;
 		int weOriginX,weOriginY,weOriginZ;
 		
 		//new for 1.13 and structure support
@@ -6515,7 +7870,7 @@ public class S2CB extends JFrame {
 			
 			//debug
 			if(isAir() && !name.contains("air")){
-				System.out.println("AIR TYPE BLOCK NOT ANMED AIR!: "+name);
+				System.out.println("AIR TYPE BLOCK NOT NAMED AIR!: "+name);
 			}
 		}
 		
@@ -6552,7 +7907,7 @@ public class S2CB extends JFrame {
 		}
 		
 		public void setPassTwo() {
-			//mostly (only?) used so that sugar case isn't placed before the water that allows it to survive
+			//mostly (only?) used so that sugar cane isn't placed before the water that allows it to survive
 			issues = issues | ISSUE_PASS_TWO;
 		}
 		
@@ -6582,10 +7937,10 @@ public class S2CB extends JFrame {
 		}
 	}
 	
-	static class Block {
+	static class Block implements Cloneable {
 		BlockType type;
 		String properties;
-		TagCompound compound;
+		CompoundTag compound;
 		
 		@Override
 		public boolean equals(Object o) {
@@ -6598,16 +7953,16 @@ public class S2CB extends JFrame {
 						return true;
 					}else if( this.compound != null && b.compound != null) {
 						//need to compare "nbt" sub-tags
-						if( this.compound.getTags().containsKey("nbt") && b.compound.getTags().containsKey("nbt")) {
+						if( this.compound.containsKey("nbt") && b.compound.containsKey("nbt")) {
 
 								try {
-									return  this.compound.getCompound("nbt").equals(b.compound.getCompound("nbt"));
-								} catch (UnexpectedTagTypeException | TagNotFoundException e) {
+									return  this.compound.getCompoundTag("nbt").equals(b.compound.getCompoundTag("nbt"));
+								} catch (Exception e) {
 									//this should never happen as we just checked if they exist
 									e.printStackTrace();
 								}
 								
-						}else if(!this.compound.getTags().containsKey("nbt") && !b.compound.getTags().containsKey("nbt")) {
+						}else if(!this.compound.containsKey("nbt") && !b.compound.containsKey("nbt")) {
 							return true;
 						}
 					}
@@ -6629,6 +7984,20 @@ public class S2CB extends JFrame {
 		@Override
 		public int hashCode() {
 			return Objects.hash(type, properties, compound);
+		}
+		
+		@Override
+		public Block clone() {
+			Block c = null;
+			try {
+				c = (Block) super.clone();
+				if(compound!=null)
+					c.compound = compound.clone();
+			} catch (CloneNotSupportedException e) {
+				// TODO Auto-generated catch block
+				e.printStackTrace();
+			}
+			return c;
 		}
 	}
 	
